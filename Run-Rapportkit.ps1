@@ -707,9 +707,25 @@ try {
                 if (-not (Test-Path $testsDir)) { Write-Action 'Hämtar Maesters testsvit (Install-MaesterTests)'; Install-MaesterTests -Path $testsDir }
                 if (-not (Test-Path $testsDir)) { throw 'Maesters testsvit hämtades inte (mappen maester-tests saknas). Kontrollera internetanslutningen och kör om.' }
                 Write-Action 'Kör Invoke-Maester'
-                Invoke-Maester -Path $testsDir -OutputFolder (Join-Path $Dirs.maester 'test-results') `
-                    -OutputJsonFile (Join-Path $Dirs.maester 'test-results\maester.json') -NonInteractive -PassThru | Out-Null
-                if (-not (Test-Path (Join-Path $Dirs.maester 'test-results\maester.json'))) { throw 'Maester avslutades men resultatfilen maester.json saknas.' }
+                $mtOut = Join-Path $Dirs.maester 'test-results'
+                $mtJson = Join-Path $mtOut 'maester.json'
+                New-Item -ItemType Directory -Force $mtOut | Out-Null      # mappen ska finnas innan Maester skriver dit
+                $res = Invoke-Maester -Path $testsDir -OutputFolder $mtOut -OutputJsonFile $mtJson -NonInteractive -PassThru | Select-Object -Last 1
+                if (-not (Test-Path $mtJson)) {
+                    # Maester skrev ingen JSON-fil. Finns ett resultatobjekt skriver vi en egen sammanfattning av det.
+                    if ($res -and (@($res.PSObject.Properties.Name) -contains 'PassedCount')) {
+                        Add-Warning 'Maester skrev ingen maester.json (kan bero på blockerad skrivning, se README). Sammanfattar från resultatobjektet istället.'
+                        [pscustomobject]@{
+                            PassedCount = $res.PassedCount; FailedCount = $res.FailedCount; SkippedCount = $res.SkippedCount
+                            Tests = @($res.Tests | ForEach-Object { [pscustomobject]@{ Name = $_.Name; Result = $_.Result } })
+                        } | ConvertTo-Json -Depth 4 | Set-Content $mtJson -Encoding utf8
+                    }
+                    else {
+                        $found = (Get-ChildItem $Dirs.maester -Recurse -File -ErrorAction SilentlyContinue | Select-Object -First 10 | ForEach-Object { $_.FullName.Substring($Dirs.maester.Length + 1) }) -join ', '
+                        if (-not $found) { $found = '(inga)' }
+                        throw "Maester avslutades men maester.json saknas. Filer i maester-mappen: $found. Blockerar Windows Defender (Kontrollerad mappåtkomst) skrivning? Se felsökning i README."
+                    }
+                }
                 Set-Status 'Maester' 'OK'
                 Write-Ok 'Maester klar'
             }

@@ -101,6 +101,20 @@ Kan kundens dator inte hämta saker själv: kör `Build-Bundle.ps1` på en dator
 .\Build-Bundle.ps1 -SkipInstallers  # utan PowerShell/Azure CLI/Git
 ```
 
+### Ge dig själv läsrätt på tenant root (görs av en Global Administrator)
+
+1. Entra ID > Properties > **Access management for Azure resources** = Yes > Save. (Ger tillfälligt rollen User Access Administrator på scope `/`.) Logga ut och in igen.
+2. Kör, med ett konto som nu har rätten:
+
+```powershell
+$me = az ad signed-in-user show --query id -o tsv
+az role assignment create --assignee-object-id $me --assignee-principal-type User --role "Reader" --scope "/"
+az role assignment create --assignee-object-id $me --assignee-principal-type User --role "Security Reader" --scope "/"
+az role assignment create --assignee-object-id $me --assignee-principal-type User --role "Cost Management Reader" --scope "/"
+```
+
+3. Sätt **Access management for Azure resources** tillbaka till No.
+
 ## Om något går fel
 
 Scriptet är byggt för att avbrott ska vara begripliga:
@@ -118,6 +132,8 @@ Slutkod: `0` = allt gick bra, `2` = något verktyg misslyckades men rapport finn
 | Problem | Åtgärd |
 |---|---|
 | `AuthorizationFailed` eller tomma resultat | Kontrollera att rollerna är aktiva (PIM) och tilldelade på rätt scope |
+| Governance Visualizer: permission check FAILED, trots att du är Global Administrator | Global Administrator i Entra ID ger **inte** åtkomst till Azure-resurser. Höj åtkomsten tillfälligt: Entra ID > Properties > **Access management for Azure resources** = Yes. Tilldela sedan dig själv Reader (och Security Reader, Cost Management Reader) på scope `/`, och sätt reglaget tillbaka till No. Kommandon finns i avsnittet nedan |
+| Windows Defender: "Unauthorized changes blocked" för `pwsh.exe` | Kontrollerad mappåtkomst (ransomware-skydd) blockerar skrivning till en skyddad mapp. Notifieringen anger mappen: öppna Windows Security > Virus & threat protection > Ransomware protection > Block history. Låt scriptet skriva till en mapp som inte är skyddad (`-OutputRoot C:\rapportkit`) eller tillåt `C:\Program Files\PowerShell\7\pwsh.exe` under "Allow an app through Controlled folder access". Hanteras säkerhetsinställningen av IT får de göra det |
 | Governance Visualizer: permission check FAILED | Reader saknas på Tenant Root Group, eller ange `-ManagementGroupId` |
 | Governance Visualizer väntar på tangenttryckning | Tryck Enter. Det kommer av en behörighetsvarning från verktyget; scriptet kör vidare |
 | `Connect-Maester` kräver godkännande | En Global Administrator måste ge admin consent för Microsoft Graph Command Line Tools |
