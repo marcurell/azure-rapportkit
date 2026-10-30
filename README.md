@@ -19,10 +19,10 @@ Scriptet ändrar ingenting i Azure eller Entra. Det som installeras hamnar på d
 $dest = Join-Path $env:USERPROFILE 'rapportkit-kit'
 $zip  = Join-Path $env:TEMP 'azure-rapportkit.zip'
 New-Item -ItemType Directory -Force $dest | Out-Null
-Invoke-WebRequest 'https://github.com/marcurell/azure-rapportkit/archive/refs/tags/v1.0.5.zip' -OutFile $zip
+Invoke-WebRequest 'https://github.com/marcurell/azure-rapportkit/archive/refs/tags/v1.0.6.zip' -OutFile $zip
 Expand-Archive $zip $dest -Force
 Get-ChildItem $dest -Recurse | Unblock-File
-$script = Join-Path $dest 'azure-rapportkit-1.0.5\Run-Rapportkit.ps1'
+$script = Join-Path $dest 'azure-rapportkit-1.0.6\Run-Rapportkit.ps1'
 $arg = '-NoExit -ExecutionPolicy Bypass -File "' + $script + '"'
 Start-Process powershell -ArgumentList $arg
 ```
@@ -98,6 +98,7 @@ Har kontot bara åtkomst till en subscription faller Governance Visualizer på b
 | `-Offline` | Ladda inte ner något, använd bara `tools\` (se nedan) |
 | `-ReportOnly` | Bygg bara om HTML-rapporten från befintliga resultat |
 | `-Yes` | Svara ja på alla "fortsätta ändå?"-frågor (för automatiska körningar) |
+| `-MaxPortalSubscriptions <n>` | Högst så många aktiva prenumerationer hämtas Defender- och kostnadsdata för (standard 25) |
 | `-OutputRoot` / `-Period` | Annan resultatmapp / månadsmapp |
 
 ## Offline-bundle
@@ -146,7 +147,12 @@ Slutkod: `0` = allt gick bra, `2` = något verktyg misslyckades men rapport finn
 | Governance Visualizer visar "LEAST PRIVILEGE ADVICE" | Informationsmeddelande: kontot har fler roller än Reader. Inget fel; scriptet låter den inte pausa körningen |
 | Governance Visualizer stoppar på `classicAdministrators` (404) | Fixat: det pensionerade API:et hoppas över i den lokala kopian (klassiska administratörer rapporteras därför inte) |
 | `Connect-Maester` kräver godkännande | En Global Administrator måste ge admin consent för Microsoft Graph Command Line Tools |
-| Skript blockeras | `Set-ExecutionPolicy -Scope Process -ExecutionPolicy Bypass` i samma fönster |
+| Skript blockeras | `Set-ExecutionPolicy -Scope Process -ExecutionPolicy Bypass` i samma fönster. Styrs körpolicyn av grupprincip gäller inte Bypass; förkontrollen visar det |
+| Inloggningen misslyckas med `AADSTS53003`, `AADSTS50076` m.fl. | Tenantens villkorsstyrda åtkomst (Conditional Access) stoppar inloggningen. Be IT tillåta apparna "Microsoft Azure CLI", "Azure PowerShell" och "Microsoft Graph Command Line Tools" för ditt konto, eller kör från en hanterad/kompatibel dator |
+| Rollerna "saknas" fast du har dem via PIM | Aktivera rollerna först (Entra ID > Privileged Identity Management > My roles) och kör om |
+| Nedladdningar misslyckas bakom företagsproxy | Scriptet skickar med Windows-inloggningen till proxyn. Hjälper det inte: kontrollera att github.com, objects.githubusercontent.com och www.powershellgallery.com släpps igenom, eller använd offline-bundlen (`Build-Bundle.ps1`) |
+| Förkontrollen säger "begränsat läge" (AppLocker/WDAC) | Scriptet kan inte köras i Constrained Language Mode. Be IT om undantag, eller kör på en annan dator |
+| `azqr går inte att köra` | Antivirus/EDR/AppLocker blockerar den nedladdade `azqr.exe`. Be IT tillåta den |
 
 Loggen från körningen sparas i `rapportkit.log` i resultatmappen.
 
