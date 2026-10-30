@@ -1,6 +1,8 @@
 # azure-rapportkit
 
-Ett PowerShell-script som tar fram underlag inför en Azure-genomgång. Det hämtar verktygen, loggar in, kör tre gratis read-only-verktyg och sammanfattar resultatet i en HTML-rapport.
+[![CI](https://github.com/marcurell/azure-rapportkit/actions/workflows/ci.yml/badge.svg)](https://github.com/marcurell/azure-rapportkit/actions/workflows/ci.yml)
+
+Ett PowerShell-script som tar fram underlag inför en Azure-genomgång. Det hämtar verktygen, loggar in, kör tre gratis verktyg som bara läser och sammanfattar resultatet i en HTML-rapport.
 
 | Verktyg | Vad det ger |
 |---|---|
@@ -8,7 +10,7 @@ Ett PowerShell-script som tar fram underlag inför en Azure-genomgång. Det häm
 | [azqr](https://github.com/Azure/azqr) | Rekommendationer per resurs, Advisor, Defender |
 | [Maester](https://maester.dev) (valfritt) | Tester av Entra ID: MFA, Conditional Access, privilegierade roller |
 
-Scriptet ändrar ingenting i Azure eller Entra. Det som installeras hamnar på datorn som kör det.
+Scriptet **skriver inget i Azure-resurser eller i Entra-konfigurationen**. Det gör däremot följande, vilket är bra att veta: det installerar verktyg på datorn, skapar inloggningssessioner (som syns i tenantens loggar), kräver att en administratör godkänner läsbehörigheter för Maester (admin consent, en ändring i tenanten), och sparar konfidentiella resultat lokalt. Allt detta beskrivs för kunden i [docs/KUNDINFO.md](docs/KUNDINFO.md). Verktygen och deras licenser finns i [THIRD-PARTY-NOTICES.md](THIRD-PARTY-NOTICES.md).
 
 ## Snabbstart: ett kommando
 
@@ -19,10 +21,10 @@ Scriptet ändrar ingenting i Azure eller Entra. Det som installeras hamnar på d
 $dest = Join-Path $env:USERPROFILE 'rapportkit-kit'
 $zip  = Join-Path $env:TEMP 'azure-rapportkit.zip'
 New-Item -ItemType Directory -Force $dest | Out-Null
-Invoke-WebRequest 'https://github.com/marcurell/azure-rapportkit/archive/refs/tags/v1.0.6.zip' -OutFile $zip
+Invoke-WebRequest 'https://github.com/marcurell/azure-rapportkit/archive/refs/tags/v1.0.7.zip' -OutFile $zip
 Expand-Archive $zip $dest -Force
 Get-ChildItem $dest -Recurse | Unblock-File
-$script = Join-Path $dest 'azure-rapportkit-1.0.6\Run-Rapportkit.ps1'
+$script = Join-Path $dest 'azure-rapportkit-1.0.7\Run-Rapportkit.ps1'
 $arg = '-NoExit -ExecutionPolicy Bypass -File "' + $script + '"'
 Start-Process powershell -ArgumentList $arg
 ```
@@ -50,9 +52,26 @@ Set-ExecutionPolicy -Scope Process -ExecutionPolicy Bypass
 .\Run-Rapportkit.ps1
 ```
 
-Under körningen skriver scriptet ut vilket steg det är på (`Steg 3/7: Inloggning`), vad det gör just nu (`->`), och vad du själv behöver göra (`>>>`).
+Under körningen visar scriptet en ruta per steg (`STEG 3 AV 10`) med förloppsstapel, färgade statusetiketter (`OK`, `VARNING`, `SAKNAS`, `FEL`) och `GÖR` när något är ditt att göra. Det avslutar med en sammanfattningsruta med tid per verktyg. Visas ramarna fel i din konsol: kör med `-Plain`.
 
-Resultatet hamnar i `C:\rapportkit\<år-månad>\`, med `rapport.html` som sammanfattning.
+Scriptet frågar först **var resultatet ska sparas** (förslag: `%USERPROFILE%\rapportkit`). Det varnar om mappen ligger i OneDrive (synkas till molnet) eller under Dokument/Skrivbord (Windows kan blockera skrivning). Ange `-OutputRoot <mapp>` för att hoppa över frågan.
+
+## Resultat och loggar
+
+Allt hamnar i `<resultatmapp>\<år-månad>\`:
+
+| Fil | Innehåll |
+|---|---|
+| `rapport.html` | Sammanfattning: status, varningar, nyckeltal, begränsningar och fakta om körningen |
+| `azgovviz\`, `azqr\`, `maester\` | Verktygens egna rapporter |
+| `portal\` | Defender- och kostnadsdata som CSV (inklusive Secure Score per kontroll) |
+| `rapportkit.log` | Rensad logg med tidsstämpel och nivå |
+| `rapportkit-console.log` | Hela konsolutskriften inklusive verktygens text (felsökning; tas inte med i zippen) |
+| `run-summary.json` | Maskinläsbar sammanfattning: versioner, tid per steg, status, varningar, slutkod |
+
+Utanför mappen: `rapportkit_<tenant>_<år-månad>.zip` med en `.sha256`-fil, så att mottagaren kan kontrollera att filen kommit fram oförändrad (stäng av med `-NoZip`). Zippen är inte krypterad.
+
+**Utloggning:** scriptet loggar ut de sessioner (Azure CLI, Azure PowerShell, Microsoft Graph) som det själv skapade när det är klart. En inloggning som fanns innan rörs inte. Stäng av med `-KeepLogin`.
 
 ## Behörigheter
 
@@ -78,12 +97,12 @@ Har kontot bara åtkomst till en subscription faller Governance Visualizer på b
 1. **Förberedelser**: tenant-ID, resultatmappar, loggfil.
 2. **Förkontroll**: kontrollerar verktyg, nätverk (GitHub, PowerShell Gallery, inloggning, Azure, Graph), diskutrymme och om frågor kan besvaras, innan något hämtas. Saknas något visas det tydligt och du väljer om du vill fortsätta ändå.
 3. **Azure CLI, inloggning och rollkontroll**: installerar Azure CLI om det saknas, loggar in och kontrollerar kontots roller (Azure och Entra). Saknas roller får du instruktionen och väljer att avsluta eller fortsätta.
-4. **Beroenden**: hämtar det som saknas. PowerShell 7 och azqr via winget (azqr annars direkt från GitHub), Governance Visualizer som zip från GitHub, moduler från PowerShell Gallery till `C:\rapportkit\_modules`.
+4. **Beroenden**: hämtar det som saknas, i **fasta, testade versioner**. PowerShell 7 och azqr via winget (azqr annars direkt från GitHub), Governance Visualizer som zip från GitHub och moduler från PowerShell Gallery till `<resultatmapp>\_modules`. Zip-filerna kontrolleras mot SHA256-kontrollsummor, och en ändrad fil stoppar körningen (se `-AllowUnverified`).
 5. **Inloggning**: Az PowerShell och valfritt Microsoft Graph. Därefter kontrolleras om kontot kan läsa management group som Governance Visualizer startar på.
 6. **Governance Visualizer**
 7. **azqr**
 8. **Maester**
-9. **Defender och kostnad**: hämtar automatiskt Defender-planer, Secure Score, Defender-rekommendationer och kostnad per månad för de senaste 12 månaderna, via Azure Resource Manager (read-only). Sparas som CSV i `portal\`. Det som tidigare var manuella exporter från portalen.
+9. **Defender och kostnad**: hämtar automatiskt Defender-planer, Secure Score (även per kontroll), Defender-rekommendationer och kostnad per månad för de senaste 12 månaderna, via Azure Resource Manager (read-only). Sparas som CSV i `portal\`. Det som tidigare var manuella exporter från portalen.
 10. **HTML-rapport**
 
 ## Flaggor
@@ -99,11 +118,18 @@ Har kontot bara åtkomst till en subscription faller Governance Visualizer på b
 | `-ReportOnly` | Bygg bara om HTML-rapporten från befintliga resultat |
 | `-Yes` | Svara ja på alla "fortsätta ändå?"-frågor (för automatiska körningar) |
 | `-MaxPortalSubscriptions <n>` | Högst så många aktiva prenumerationer hämtas Defender- och kostnadsdata för (standard 25) |
-| `-OutputRoot` / `-Period` | Annan resultatmapp / månadsmapp |
+| `-OutputRoot <mapp>` | Resultatmapp. Anges den inte frågar scriptet |
+| `-Period <namn>` | Namn på undermappen för körningen (standard: innevarande månad, `yyyy-MM`) |
+| `-HidePersonalData` | Dölj namn och e-postadresser i Governance Visualizers rapport (Maesters rapport kan ändå innehålla namn) |
+| `-KeepLogin` | Logga inte ut från sessioner som scriptet skapade |
+| `-NoZip` | Skapa ingen zip av resultatet |
+| `-Plain` | Rita ramar med ASCII-tecken (för konsoler som visar specialtecken fel) |
+| `-LatestTools` | Använd senaste verktygsversioner istället för de testade, och hoppa över kontrollsummor |
+| `-AllowUnverified` | Fortsätt trots att en kontrollsumma inte stämmer. Använd bara efter egen kontroll |
 
 ## Offline-bundle
 
-Kan kundens dator inte hämta saker själv: kör `Build-Bundle.ps1` på en dator med internet. Det laddar ner verktygen till `tools\` och packar scriptet och verktygen i `rapportkit-bundle.zip`. Kunden packar upp zippen och kör `.\Run-Rapportkit.ps1 -Offline`.
+Kan kundens dator inte hämta saker själv: kör `Build-Bundle.ps1` på en dator med internet. Det laddar ner de fasta versionerna till `tools\` (kontrollsummorna kontrolleras), och packar scriptet, verktygen, licenstexterna och kundinformationen i `rapportkit-bundle.zip` med en `.sha256`-fil. Kunden packar upp zippen och kör `.\Run-Rapportkit.ps1 -Offline`.
 
 ```powershell
 .\Build-Bundle.ps1                  # med installers (~300 MB)
@@ -154,15 +180,17 @@ Slutkod: `0` = allt gick bra, `2` = något verktyg misslyckades men rapport finn
 | Förkontrollen säger "begränsat läge" (AppLocker/WDAC) | Scriptet kan inte köras i Constrained Language Mode. Be IT om undantag, eller kör på en annan dator |
 | `azqr går inte att köra` | Antivirus/EDR/AppLocker blockerar den nedladdade `azqr.exe`. Be IT tillåta den |
 
-Loggen från körningen sparas i `rapportkit.log` i resultatmappen.
+Skicka `rapportkit.log` (och vid behov `rapportkit-console.log`) från resultatmappen när du ber om hjälp. Loggarna innehåller inga lösenord eller tokens, men tenant-ID och namn på konton och resurser kan förekomma.
 
 ## Licens
 
-MIT, se [LICENSE](LICENSE). Verktygen som scriptet hämtar har sina egna licenser (Azure Governance Visualizer, azqr och Maester är alla öppna).
+MIT, se [LICENSE](LICENSE). Verktygen som scriptet hämtar har sina egna licenser, se [THIRD-PARTY-NOTICES.md](THIRD-PARTY-NOTICES.md).
 
 ## Känt
 
 - Governance Visualizer hämtas i en fast version (6.7.2) som scriptet är testat mot.
-- Scriptet patchar den hämtade kopian av Governance Visualizer (den i `C:\rapportkit\Azure-Governance-Visualizer-6.7.2`, originalet på GitHub rörs inte) på tre ställen: ingen y/n-fråga om moduler, inga pauser på tangenttryckning, och det pensionerade classic administrators-API:et hoppas över. Patcharna är knutna till version 6.7.2 och kan sluta fungera om verktyget ändras; scriptet varnar om en patch inte kunde tillämpas.
+- Scriptet patchar den hämtade kopian av Governance Visualizer (den i `<resultatmapp>\Azure-Governance-Visualizer-6.7.2`, originalet på GitHub rörs inte) på tre ställen: ingen y/n-fråga om moduler, inga pauser på tangenttryckning, och det pensionerade classic administrators-API:et hoppas över. Patcharna är knutna till version 6.7.2 och kan sluta fungera om verktyget ändras; scriptet varnar om en patch inte kunde tillämpas.
 - Governance Visualizer körs med `-NoPIMEligibility` (kräver servicekonto) och `-NoALZPolicyVersionChecker` (kräver git och GitHub).
 - Resultatmapparna innehåller konfidentiell information. De ligger utanför repot och ska aldrig checkas in.
+- Defender-rekommendationer hämtas från Azures API, som kan returnera en ofullständig lista. Därför hämtas även Secure Score per kontroll, och scriptet varnar när de inte stämmer överens.
+- Utveckling: `tests\` innehåller enhetstester (Pester) och `.github\workflows\ci.yml` kör syntaxkontroll i PowerShell 5.1 och 7, statisk analys, testerna, samt en kontroll varje vecka att de pinnade kontrollsummorna fortfarande stämmer uppströms.
