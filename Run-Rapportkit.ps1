@@ -60,7 +60,9 @@
   Kör inga verktyg, bygg bara om HTML-rapporten från befintliga resultat.
 .PARAMETER SkipPortal
   Hoppa över hämtningen av Defender- och kostnadsdata (steg 9).
-.PARAMETER Yes
+.PARAMETER MaxPortalSubscriptions
+  Högst så många (aktiva) prenumerationer hämtas Defender- och kostnadsdata för (standard 25). Cost Management
+  begränsar anrop hårt, så hundratals prenumerationer tar timmar..PARAMETER Yes
   Svara ja på alla "fortsätta ändå?"-frågor (förkontroll och behörighetskontroll), t.ex. för automatiska körningar.
 
 .EXAMPLE
@@ -82,6 +84,7 @@ param(
     [switch]$Offline,
     [switch]$ReportOnly,
     [switch]$SkipPortal,
+    [int]$MaxPortalSubscriptions = 25,
     [switch]$Yes
 )
 
@@ -90,6 +93,10 @@ param(
 $ErrorActionPreference = 'Stop'
 # Nedladdningar går mycket snabbare utan förloppsindikatorn.
 $ProgressPreference = 'SilentlyContinue'
+# Företagsproxy kräver ofta att Windows-inloggningen skickas med (annars HTTP 407). Gäller både Windows PowerShell 5.1
+# och PowerShell 7.
+try { [System.Net.WebRequest]::DefaultWebProxy.Credentials = [System.Net.CredentialCache]::DefaultCredentials } catch { }
+try { [System.Net.Http.HttpClient]::DefaultProxy.Credentials = [System.Net.CredentialCache]::DefaultCredentials } catch { }
 
 # Sparas direkt: $PSBoundParameters går inte att nå från funktioner. Används för att bygga
 # "kör om"-kommandot och för att starta om scriptet i PowerShell 7.
@@ -138,7 +145,16 @@ function Get-ErrorText($err) {
     $ex = if ($err -is [System.Management.Automation.ErrorRecord]) { $err.Exception } else { $err }
     $t = $ex.Message
     if ($ex.Data -and $ex.Data['Fix']) { $t += ' ' + $ex.Data['Fix'] }
-    $t
+    $t + (Get-SignInHelp $ex.Message)
+}
+
+# Känner igen vanliga inloggningsfel i företagsmiljöer (Conditional Access, MFA, kompatibel enhet, blockerad app) och
+# ger en text som kunden kan ta vidare till sin IT-avdelning. Tom sträng om inget känns igen.
+function Get-SignInHelp([string]$Text) {
+    if ($Text -match 'AADSTS(53000|53001|53002|53003|53004|530003|530004|50105|50020|700016|65001|900144|50076|50079|50158)|[Cc]onditional [Aa]ccess|compliant|blocked by|not compliant|device (is )?not') {
+        return ' Det här ser ut som att tenantens villkorsstyrda åtkomst (Conditional Access) eller en consent-inställning stoppar inloggningen. Be IT att tillåta apparna "Microsoft Azure CLI", "Azure PowerShell" och "Microsoft Graph Command Line Tools" för ditt konto, eller kör scriptet från en hanterad/kompatibel dator.'
+    }
+    ''
 }
 
 # Bygger kommandot för att köra om scriptet med samma val (inkl. tenant-ID, så ingen fråga ställs).
@@ -209,7 +225,7 @@ function Test-ActionAllowed($Perms, [string]$Action) {
 
 # Anropar Azure Resource Manager via az rest (inget az-tillägg behövs). Försöker 3 gånger vid
 # hastighetsbegränsning (429). Kastar fel med Azures meddelande om anropet misslyckas.
-function Invoke-AzRest([string]$Method, [string]$Url, $Body) {
+function Invoke-ArmRest([string]$Method, [string]$Url, $Body) {
     $azArgs = @('rest', '--method', $Method, '--url', $Url, '-o', 'json')
     $tmp = $null
     if ($Body) {
@@ -289,6 +305,7 @@ function Get-RoleInstructions($Missing) {
     $azure = @($Missing | Where-Object { $_.Kind -eq 'Azure' })
     $entra = @($Missing | Where-Object { $_.Kind -eq 'Entra' })
     $lines = [System.Collections.Generic.List[string]]::new()
+    $lines.Add('Använder ni Privileged Identity Management (PIM)? Aktivera då rollerna först (Entra ID > Privileged Identity Management > My roles) och kör om. Inget saknas då, rollerna är bara inte aktiva.')
     if ($azure.Count) {
         $lines.Add('Azure-roller (på tenant root, scope "/"):')
         $lines.Add('1. Entra ID > Properties > "Access management for Azure resources" = Yes. Spara, logga ut och in igen.')
@@ -559,6 +576,12 @@ try {
         $isAdmin = ([Security.Principal.WindowsPrincipal][Security.Principal.WindowsIdentity]::GetCurrent()).IsInRole([Security.Principal.WindowsBuiltInRole]::Administrator)
         Add-Check 'INFO' 'Windows-behörighet' $(if ($isAdmin) { 'förhöjd (administratör). Krävs inte.' } else { 'vanlig användare. Räcker; Windows kan be om godkännande (UAC) vid installation av PowerShell 7/Azure CLI.' })
         if ([Console]::IsInputRedirected) { Add-Check 'VARNING' 'Interaktivt fönster' 'inmatning är omdirigerad: frågor går inte att besvara och inloggning kan misslyckas' }
+        # AppLocker/WDAC sätter PowerShell i begränsat läge, där scriptets .NET-anrop blockeras och körningen går sönder mitt i.
+        $langMode = $ExecutionContext.SessionState.LanguageMode
+        if ($langMode -ne 'FullLanguage') { Add-Check 'SAKNAS' 'PowerShell-läge' "begränsat läge ($langMode), t.ex. via AppLocker/WDAC. Scriptet använder anrop som blockeras. Be IT om undantag, eller kör på en annan dator." }
+        else { Add-Check 'OK' 'PowerShell-läge' 'FullLanguage' }
+        $gpoPolicy = @(Get-ExecutionPolicy -List | Where-Object { $_.Scope -in 'MachinePolicy', 'UserPolicy' -and $_.ExecutionPolicy -ne 'Undefined' })
+        if ($gpoPolicy.Count) { Add-Check 'INFO' 'Körpolicy (grupprincip)' ("styrs av grupprincip: " + (($gpoPolicy | ForEach-Object { "$($_.Scope)=$($_.ExecutionPolicy)" }) -join ', ') + ". -ExecutionPolicy Bypass gäller inte då; fungerar det här steget går scriptet att köra.") }
         Add-Check 'INFO' 'Behörigheter i Azure' 'kontrolleras direkt efter inloggningen i steg 3 (Reader, Security Reader, Cost Management Reader, Global Reader); saknas något får du välja att avsluta'
 
         foreach ($c in $checks) {
@@ -590,14 +613,17 @@ try {
             if ($cur -eq $TenantId) { Write-Ok 'Azure CLI är redan inloggad mot rätt tenant' }
             else {
                 Write-Todo 'Logga in i webbläsarfönstret som öppnas (Azure CLI)...'
-                if ($DeviceLogin) { az login --tenant $TenantId --use-device-code --allow-no-subscriptions --only-show-errors | Out-Null }
-                else              { az login --tenant $TenantId --allow-no-subscriptions --only-show-errors | Out-Null }
+                $loginLines = [System.Collections.Generic.List[string]]::new()
+                # Utskriften visas (enhetskoden vid -DeviceLogin måste synas) men sparas också.
+                if ($DeviceLogin) { az login --tenant $TenantId --use-device-code --allow-no-subscriptions --only-show-errors 2>&1 | ForEach-Object { $loginLines.Add("$_"); $_ } | Out-Host }
+                else              { az login --tenant $TenantId --allow-no-subscriptions --only-show-errors 2>&1 | ForEach-Object { $loginLines.Add("$_"); $_ } | Out-Host }
             }
             if ((az account show --query tenantId -o tsv 2>$null) -ne $TenantId) {
-                Fail 'Azure CLI-inloggningen mot rätt tenant slutfördes inte.' 'Kör om scriptet och logga in när webbläsarfönstret öppnas (eller använd -DeviceLogin).'
+                Fail ('Azure CLI-inloggningen mot rätt tenant slutfördes inte.' + (Get-SignInHelp ($loginLines -join ' '))) 'Kör om scriptet och logga in när webbläsarfönstret öppnas (eller använd -DeviceLogin).'
             }
             # (Räknas i PowerShell: parenteser i --query förstörs av az.cmd:s citering.)
-            $subCount = @(az account list --query '[].id' -o tsv 2>$null | Where-Object { $_ }).Count
+            # Bara aktiva prenumerationer räknas (inaktiva ger bara fel).
+            $subCount = @(az account list -o json 2>$null | ConvertFrom-Json | Where-Object { $_.state -eq 'Enabled' }).Count
             Write-Ok "Azure CLI inloggad ($subCount subscription(s) synliga)"
             $azReady = $true
         }
@@ -755,7 +781,7 @@ try {
                 try { Connect-Maester -TenantId $TenantId | Out-Null; Write-Ok 'Microsoft Graph inloggad' }
                 catch {
                     $SkipMaester = $true
-                    Set-Status 'Maester' 'Fel' "Graph-inloggning misslyckades: $($_.Exception.Message) En Global Administrator behöver ge admin consent för 'Microsoft Graph Command Line Tools'. Kör sedan om scriptet."
+                    Set-Status 'Maester' 'Fel' ("Graph-inloggning misslyckades: $($_.Exception.Message) En Global Administrator behöver ge admin consent för 'Microsoft Graph Command Line Tools'. Kör sedan om scriptet." + (Get-SignInHelp $_.Exception.Message))
                     Write-Warn2 $Status['Maester'].Note
                 }
             }
@@ -876,6 +902,9 @@ try {
                 Push-Location $Dirs.azqr
                 # Rensa gamla resultat för samma period så att vi inte läser blandade körningar.
                 Get-ChildItem $Dirs.azqr -Filter "azqr_$Period*" -ErrorAction SilentlyContinue | Remove-Item -Force
+                # Kan azqr startas alls? Antivirus/EDR/AppLocker kan blockera nedladdade exe-filer utan tydligt fel.
+                & azqr --help *> $null
+                if ($LASTEXITCODE -ne 0) { throw "azqr går inte att köra (exit-kod $LASTEXITCODE). Blockeras det av antivirus/EDR/AppLocker? Be IT tillåta azqr.exe och kör om." }
                 Write-Action 'Kör: azqr scan --json --csv --xlsx'
                 # --json/--csv gör att vi kan läsa resultatet i HTML-rapporten; --xlsx är den fullständiga rapporten.
                 azqr scan --json --csv --xlsx -o "azqr_$Period" 2>&1 | Out-Host
@@ -942,18 +971,23 @@ try {
             $portalErrors = [System.Collections.Generic.List[string]]::new()
             $portalOk = 0
             try {
-                $subs = @(az account list --query '[].{id:id,name:name}' -o json 2>$null | ConvertFrom-Json)
+                $subs = @(az account list -o json 2>$null | ConvertFrom-Json | Where-Object { $_.state -eq 'Enabled' } | Sort-Object name)
+                if ($subs.Count -gt $MaxPortalSubscriptions) {
+                    Add-Warning "Kontot ser $($subs.Count) aktiva prenumerationer. Defender och kostnad hämtas bara för de första $MaxPortalSubscriptions (alfabetiskt): ändra med -MaxPortalSubscriptions."
+                    $subs = @($subs | Select-Object -First $MaxPortalSubscriptions)
+                }
+                $subNo = 0
                 $planRows = [System.Collections.Generic.List[object]]::new()
                 $scoreRows = [System.Collections.Generic.List[object]]::new()
                 $recRows = [System.Collections.Generic.List[object]]::new()
                 $costRows = [System.Collections.Generic.List[object]]::new()
                 foreach ($s in $subs) {
-                    $sid = $s.id; $sname = $s.name
-                    Write-Action "Prenumeration: $sname"
+                    $sid = $s.id; $sname = $s.name; $subNo++
+                    Write-Action "Prenumeration $subNo/$($subs.Count): $sname"
 
                     # Defender-planer (på/av per tjänst)
                     try {
-                        $r = Invoke-AzRest 'GET' "https://management.azure.com/subscriptions/$sid/providers/Microsoft.Security/pricings?api-version=2024-01-01"
+                        $r = Invoke-ArmRest 'GET' "https://management.azure.com/subscriptions/$sid/providers/Microsoft.Security/pricings?api-version=2024-01-01"
                         foreach ($p in @($r.value)) { $planRows.Add([pscustomobject]@{ Prenumeration = $sname; Plan = $p.name; Niva = $p.properties.pricingTier; Delplan = $p.properties.subPlan }) }
                         $portalOk++
                     }
@@ -961,7 +995,7 @@ try {
 
                     # Secure Score
                     try {
-                        $r = Invoke-AzRest 'GET' "https://management.azure.com/subscriptions/$sid/providers/Microsoft.Security/secureScores?api-version=2020-01-01"
+                        $r = Invoke-ArmRest 'GET' "https://management.azure.com/subscriptions/$sid/providers/Microsoft.Security/secureScores?api-version=2020-01-01"
                         foreach ($sc in @($r.value)) { $scoreRows.Add([pscustomobject]@{ Prenumeration = $sname; Poang = $sc.properties.score.current; Max = $sc.properties.score.max; Andel = $sc.properties.score.percentage }) }
                         $portalOk++
                     }
@@ -973,7 +1007,7 @@ try {
                         $pages = 0; $seen = @{}; $seenIds = @{}
                         while ($url -and $pages -lt 30 -and -not $seen.ContainsKey($url)) {
                             $seen[$url] = $true; $pages++
-                            $r = Invoke-AzRest 'GET' $url
+                            $r = Invoke-ArmRest 'GET' $url
                             foreach ($a in @($r.value)) {
                                 # Defender kan returnera samma sida igen via en nextLink som pekar på sig själv: hoppa över dubletter.
                                 if ($a.id -and $seenIds.ContainsKey($a.id)) { continue }
@@ -991,7 +1025,7 @@ try {
                         $from = (Get-Date).AddDays(-364).ToString('yyyy-MM-dd'); $to = (Get-Date).ToString('yyyy-MM-dd')
                         $costBody = @{ type = 'ActualCost'; timeframe = 'Custom'; timePeriod = @{ from = "${from}T00:00:00+00:00"; to = "${to}T23:59:59+00:00" }
                                        dataset = @{ granularity = 'Monthly'; aggregation = @{ totalCost = @{ name = 'Cost'; function = 'Sum' } } } }
-                        $r = Invoke-AzRest 'POST' "https://management.azure.com/subscriptions/$sid/providers/Microsoft.CostManagement/query?api-version=2023-03-01" $costBody
+                        $r = Invoke-ArmRest 'POST' "https://management.azure.com/subscriptions/$sid/providers/Microsoft.CostManagement/query?api-version=2023-03-01" $costBody
                         $cols = @($r.properties.columns | ForEach-Object { $_.name })
                         $iCost = [array]::IndexOf($cols, 'Cost'); $iCur = [array]::IndexOf($cols, 'Currency')
                         $iMonth = [array]::IndexOf($cols, 'BillingMonth'); if ($iMonth -lt 0) { $iMonth = [array]::IndexOf($cols, 'UsageDate') }
