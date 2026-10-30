@@ -10,19 +10,40 @@ Ett PowerShell-script som tar fram underlag inför en Azure-genomgång. Det häm
 
 Scriptet ändrar ingenting i Azure eller Entra. Det som installeras hamnar på datorn som kör det.
 
-## Ladda ner
+## Snabbstart: ett kommando
 
-Gå till **Releases** i det här repot och ladda ner `Source code (zip)` för senaste versionen. Du behöver inte installera git.
+Öppna PowerShell eller PowerShell ISE och klistra in blocket nedan. Det laddar ner koden från den senaste releasen (utan git), packar upp den, avblockerar filerna och startar scriptet i ett nytt PowerShell-fönster. Följ instruktionerna i det fönstret.
+
+```powershell
+[Net.ServicePointManager]::SecurityProtocol = [Net.SecurityProtocolType]::Tls12
+$dest = Join-Path $env:USERPROFILE 'rapportkit-kit'
+$zip  = Join-Path $env:TEMP 'azure-rapportkit.zip'
+New-Item -ItemType Directory -Force $dest | Out-Null
+Invoke-WebRequest 'https://github.com/marcurell/azure-rapportkit/archive/refs/tags/v1.0.0.zip' -OutFile $zip
+Expand-Archive $zip $dest -Force
+Get-ChildItem $dest -Recurse | Unblock-File
+$script = Join-Path $dest 'azure-rapportkit-1.0.0\Run-Rapportkit.ps1'
+$arg = '-NoExit -ExecutionPolicy Bypass -File "' + $script + '"'
+Start-Process powershell -ArgumentList $arg
+```
+
+Varför ett nytt fönster: PowerShell ISE klarar inte inloggningsfönster och frågor från PowerShell 7, så scriptet ska inte köras direkt i ISE.
+
+Du behöver ha tenant-ID:t till hands (Entra ID > Overview > Tenant ID). Scriptet frågar efter det, och därefter öppnas två inloggningsfönster i webbläsaren.
+
+## Ladda ner manuellt
+
+Vill du inte använda kommandot ovan: gå till **Releases** i det här repot och ladda ner `Source code (zip)` för senaste versionen.
 
 1. Spara zippen, högerklicka på den, välj **Egenskaper**, kryssa i **Avblockera** och klicka OK. (Windows blockerar annars script som hämtats från internet.)
 2. Högerklicka på zippen och välj **Extrahera alla**.
-3. Fortsätt med "Kom igång" nedan.
+3. Fortsätt med "Kör scriptet" nedan.
 
 Vill du hellre använda git: `git clone https://github.com/marcurell/azure-rapportkit.git`
 
-## Kom igång
+## Kör scriptet
 
-Öppna PowerShell (Windows PowerShell 5.1 räcker, scriptet installerar PowerShell 7 och startar om sig självt där) och kör:
+Öppna ett vanligt PowerShell-fönster (inte ISE) i mappen med scriptet. Windows PowerShell 5.1 räcker: scriptet installerar PowerShell 7 och startar om sig självt där. Kör:
 
 ```powershell
 Set-ExecutionPolicy -Scope Process -ExecutionPolicy Bypass
