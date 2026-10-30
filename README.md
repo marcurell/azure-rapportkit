@@ -44,7 +44,7 @@ Kontot som loggar in behöver:
 | Cost Management Reader | Tenant Root Group | Kostnadsöversikt (manuell export) |
 | Global Reader | Microsoft Entra ID | Maester |
 
-Har kontot bara åtkomst till en subscription faller Governance Visualizer på behörighetskontrollen. De andra stegen körs ändå.
+Har kontot bara åtkomst till en subscription faller Governance Visualizer på behörighetskontrollen (tenant root kräver Reader). De andra stegen körs ändå.
 
 ## Steg
 
@@ -63,7 +63,6 @@ Har kontot bara åtkomst till en subscription faller Governance Visualizer på b
 | `-TenantId <guid>` | Hoppar över tenant-frågan |
 | `-ManagementGroupId <id>` | Kör Governance Visualizer mot annan management group än tenant root |
 | `-SkipGovViz` / `-SkipAzqr` / `-SkipMaester` | Hoppa över ett verktyg |
-| `-NoPIMEligibility` | Använd om Governance Visualizer stoppar på PIM |
 | `-DeviceLogin` | Inloggning med kod istället för webbläsarfönster |
 | `-NoInstall` | Hämta och installera ingenting |
 | `-Offline` | Ladda inte ner något, använd bara `tools\` (se nedan) |
@@ -79,19 +78,36 @@ Kan kundens dator inte hämta saker själv: kör `Build-Bundle.ps1` på en dator
 .\Build-Bundle.ps1 -SkipInstallers  # utan PowerShell/Azure CLI/Git
 ```
 
+## Om något går fel
+
+Scriptet är byggt för att avbrott ska vara begripliga:
+
+- **Ett verktyg misslyckas:** de andra körs ändå. Felet och vad du ska göra syns i sammanfattningen i konsolen och i statustabellen överst i `rapport.html`.
+- **Scriptet kan inte fortsätta** (till exempel ingen inloggning eller ingen internetåtkomst): det skriver orsaken, vad du ska göra och exakt vilket kommando du kör om. Det som redan är installerat återanvänds.
+- **Du avbryter (Ctrl+C) eller stänger fönstret:** kör bara scriptet igen. Inget har ändrats i Azure.
+- **Nedladdningar kontrolleras:** filstorlek, att zip-filer är hela och att förväntade filer finns. Misslyckade nedladdningar försöks 3 gånger.
+- **Resultatfiler kontrolleras** innan rapporten byggs. Oväntat format visas som varning i rapporten istället för att stoppa den.
+
+Slutkod: `0` = allt gick bra, `2` = något verktyg misslyckades men rapport finns, `1` = körningen avbröts.
+
 ## Felsökning
 
 | Problem | Åtgärd |
 |---|---|
 | `AuthorizationFailed` eller tomma resultat | Kontrollera att rollerna är aktiva (PIM) och tilldelade på rätt scope |
 | Governance Visualizer: permission check FAILED | Reader saknas på Tenant Root Group, eller ange `-ManagementGroupId` |
-| Governance Visualizer stoppar på PIM | Kör om med `-NoPIMEligibility` |
+| Governance Visualizer väntar på tangenttryckning | Tryck Enter. Det kommer av en behörighetsvarning från verktyget; scriptet kör vidare |
 | `Connect-Maester` kräver godkännande | En Global Administrator måste ge admin consent för Microsoft Graph Command Line Tools |
 | Skript blockeras | `Set-ExecutionPolicy -Scope Process -ExecutionPolicy Bypass` i samma fönster |
 
 Loggen från körningen sparas i `rapportkit.log` i resultatmappen.
 
+## Licens
+
+MIT, se [LICENSE](LICENSE). Verktygen som scriptet hämtar har sina egna licenser (Azure Governance Visualizer, azqr och Maester är alla öppna).
+
 ## Känt
 
+- Governance Visualizer hämtas i en fast version (6.7.2) som scriptet är testat mot.
 - Scriptet patchar den hämtade kopian av Governance Visualizer så att den inte ställer en y/n-fråga om moduler. Det kan sluta fungera om verktyget ändrar den koden.
 - Resultatmapparna innehåller konfidentiell information. De ligger utanför repot och ska aldrig checkas in.
