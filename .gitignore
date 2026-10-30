@@ -1,0 +1,10 @@
+# Hämtade verktyg och byggda bundles
+tools/
+rapportkit-bundle.zip
+
+# Resultat får aldrig checkas in: innehåller konfidentiell information om kundmiljöer
+rapportkit/
+*.log
+azqr_*
+AzGovViz*
+test-results/
