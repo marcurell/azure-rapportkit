@@ -10,6 +10,16 @@ Ett PowerShell-script som tar fram underlag inför en Azure-genomgång. Det häm
 
 Scriptet ändrar ingenting i Azure eller Entra. Det som installeras hamnar på datorn som kör det.
 
+## Ladda ner
+
+Gå till **Releases** i det här repot och ladda ner `Source code (zip)` för senaste versionen. Du behöver inte installera git.
+
+1. Spara zippen, högerklicka på den, välj **Egenskaper**, kryssa i **Avblockera** och klicka OK. (Windows blockerar annars script som hämtats från internet.)
+2. Högerklicka på zippen och välj **Extrahera alla**.
+3. Fortsätt med "Kom igång" nedan.
+
+Vill du hellre använda git: `git clone https://github.com/marcurell/azure-rapportkit.git`
+
 ## Kom igång
 
 Öppna PowerShell (Windows PowerShell 5.1 räcker, scriptet installerar PowerShell 7 och startar om sig självt där) och kör:
