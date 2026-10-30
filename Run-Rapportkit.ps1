@@ -255,12 +255,13 @@ function Get-RoleChecks([string]$Tenant, [bool]$NeedGovViz, [bool]$NeedPortal, [
     if ($firstSub) { try { $subPerms = (az rest --method get --url "https://management.azure.com/subscriptions/$firstSub/providers/Microsoft.Authorization/permissions?api-version=2022-04-01" -o json 2>$null | ConvertFrom-Json).value } catch { } }
     $have = if ($names.Count) { $names -join ', ' } else { 'inga på tenant root' }
 
-    # Reader: Governance Visualizer kontrollerar rollens namn, de andra verktygen räknar med effektiv läsrätt.
+    # Läsrätt på tenant root. Governance Visualizer testar bara att management group går att läsa, så vilken roll
+    # som ger läsrätten spelar ingen roll. Rollen Reader är ändå rekommenderad (minst rättigheter): har kontot
+    # fler roller än Reader skriver verktyget en "least privilege"-rekommendation (som scriptet inte låter pausa).
     $effRoot = Test-ActionAllowed $rootPerms 'Microsoft.Management/managementGroups/read'
     $effSub = Test-ActionAllowed $subPerms 'Microsoft.Resources/subscriptions/resources/read'
     if ($names -contains 'Reader') { & $add 'OK' 'Azure' 'Reader' 'tilldelad på tenant root' }
-    elseif ($effRoot -and -not $NeedGovViz) { & $add 'OK' 'Azure' 'Reader' "läsrätt på tenant root via annan roll ($have)" }
-    elseif ($effRoot) { & $add 'SAKNAS' 'Azure' 'Reader' "rollen Reader är inte tilldelad (har: $have). Läsrätt finns via den rollen, men Governance Visualizer kräver just Reader." }
+    elseif ($effRoot) { & $add 'OK' 'Azure' 'Reader' "läsrätt på tenant root finns via annan roll ($have). Rollen Reader rekommenderas men krävs inte." }
     elseif ($effSub) { & $add 'VARNING' 'Azure' 'Reader' 'saknas på tenant root men finns på subscription: azqr och portaldata fungerar, Governance Visualizer (kräver tenant root) gör det inte' }
     else { & $add 'SAKNAS' 'Azure' 'Reader' "saknas (har: $have)" }
 
@@ -799,9 +800,30 @@ try {
                     if ($patched -eq $src) { Add-Warning 'Kunde inte patcha modulkontrollen i Governance Visualizer (verktyget kan fråga y/n).' }
                     else { Set-Content $gvScript $patched -Encoding utf8 }
                 }
+                # Verktyget pausar och väntar på tangenttryckning vid tre rådgivande meddelanden (nyare version finns,
+                # PIM-tips, "least privilege"-rekommendation). Inget av dem är fel, och de stoppar körningen, så vi
+                # kommenterar bort alla "Pause" i den hämtade kopian.
+                if ($src -notmatch 'RAPPORTKIT-NOPAUSE') {
+                    $src2 = Get-Content $gvScript -Raw
+                    $noPause = [regex]::Replace($src2, '(?m)^(\s*)Pause\s*$', '$1# Pause (borttagen av rapportkit) RAPPORTKIT-NOPAUSE')
+                    if ($noPause -eq $src2) { Add-Warning 'Hittade inga pauser att ta bort i Governance Visualizer (verktyget kan vänta på tangenttryckning).' }
+                    else { Set-Content $gvScript $noPause -Encoding utf8 }
+                }
+                # Classic administrators (klassiska prenumerationsadministratörer) är pensionerat i Azure, och API:et svarar
+                # 404 "InvalidResourceType" på t.ex. MSDN-prenumerationer. Verktyget är inställt på att STOPPA vid det
+                # felet, så vi hoppar över just det anropet: funktionen får samma svar som när listningen misslyckats.
+                if ($src -notmatch 'RAPPORTKIT-NOCLASSIC') {
+                    $src3 = Get-Content $gvScript -Raw
+                    $noClassic = [regex]::Replace($src3, '(?s)(function dataCollectionClassicAdministratorsSub \{.*?)\$AzApiCallResult = AzAPICall @azAPICallPayload', "`$1`$AzApiCallResult = 'ClassicAdministratorListFailed' # RAPPORTKIT-NOCLASSIC (API pensionerat)")
+                    if ($noClassic -eq $src3) { Add-Warning 'Kunde inte hoppa över classic administrators i Governance Visualizer (kan stoppa på äldre prenumerationstyper).' }
+                    else { Set-Content $gvScript $noClassic -Encoding utf8 }
+                }
                 $mg = if ($ManagementGroupId) { $ManagementGroupId } else { $TenantId }
                 Write-Action "Kör AzGovVizParallel.ps1 mot management group '$mg'"
                 $gvArgs = @{ ManagementGroupId = $mg; OutputPath = $Dirs.azgovviz }
+                # Versionskontrollen av Azure Landing Zones-policyer klonar ett GitHub-repo med git (som inte alltid finns)
+                # och behövs inte för rapporten.
+                $gvArgs.NoALZPolicyVersionChecker = $true
                 # PIM-behörighetsrapportering kräver ett servicekonto och kan inte köras som vanlig användare.
                 # Utan flaggan pausar verktyget och väntar på tangenttryckning, så vi stänger av det direkt.
                 $gvArgs.NoPIMEligibility = $true
@@ -823,21 +845,13 @@ try {
                 $reason = @($gvLines | ForEach-Object { "$_".Trim() } |
                     Where-Object { $_ -cmatch '(^|[\s\[])(ERROR|Error)\b|check FAILED|AuthorizationFailed|not authorized|Forbidden|Exception' } |
                     Select-Object -Last 3) -join ' | '
-                # Verktyget skriver "Permission check results" när kontot saknar Reader på management group, följt
-                # av de roller kontot faktiskt har. Läs ut dem så att felet blir konkret.
-                $permFail = $false
-                for ($i = 0; $i -lt $gvLines.Count; $i++) {
-                    if ($gvLines[$i] -clike '*Permission check results*') {
-                        $permFail = $true
-                        $last = [Math]::Min($i + 10, $gvLines.Count - 1)
-                        $roles = @($gvLines[$i..$last] | ForEach-Object { if ("$_" -match '^\s*-\s+(.+?)\s+\(') { $Matches[1] } })
-                        $reason = 'Kontot saknar rollen Reader på management group' + $(if ($roles) { " (har: $($roles -join ', '))" } else { '' })
-                    }
-                }
+                # Rubriken "Permission check results" skrivs även när kontrollen går bra, så felet känns igen på
+                # raden "check FAILED" (kontot kan inte läsa management group).
+                $permFail = [bool]($gvLines | Where-Object { $_ -clike '*check FAILED*' })
                 if ($reason) { $msg = "$reason ($msg)" }
                 # Behörighetsfel: ge den vanliga förklaringen. Annars: hänvisa till utskriften.
                 $hint = if ($permFail -or $msg -cmatch 'check FAILED|AuthorizationFailed|not authorized|Forbidden') {
-                            ' Åtgärd: tilldela Reader på tenant root (har du höjt åtkomsten men saknar Reader: kör kommandona under "Ge dig själv läsrätt" i README), eller ange en annan grupp med -ManagementGroupId.' }
+                            ' Åtgärd: kontot kan inte läsa management group. Tilldela Reader på tenant root (se "Ge dig själv läsrätt" i README och kontrollera att rollen ligger på Tenant Root Group), eller ange en annan grupp med -ManagementGroupId.' }
                         else { " Hela utskriften finns i $consoleFile." }
                 # Kan rapporten ha hunnit skapas före felet? Då är resultatet delvis användbart.
                 $partial = Get-ChildItem $Dirs.azgovviz -Filter 'AzGovViz*.html' -Recurse -ErrorAction SilentlyContinue | Where-Object Length -gt 10KB | Select-Object -First 1
@@ -1099,7 +1113,11 @@ try {
 
     # --- Governance Visualizer: länk till den interaktiva rapporten + enkla tal ----
     Invoke-Section 'Governance Visualizer' {
-        $gvHtml = Get-ChildItem $Dirs.azgovviz -Filter 'AzGovViz*.html' -Recurse -ErrorAction SilentlyContinue | Select-Object -First 1
+        $gvAll = @(Get-ChildItem $Dirs.azgovviz -Filter 'AzGovViz*.html' -Recurse -ErrorAction SilentlyContinue)
+        # Huvudrapporten heter AzGovViz_<version>_<datum>_<tid>_<tenant-ID>.html. Övriga (DefinitionInsights, en per
+        # prenumeration) är sidorapporter, och de kan vara mycket stora, så välj inte bara första bästa fil.
+        $gvHtml = $gvAll | Where-Object { $_.Name -match '_\d{8}_\d{6}_[0-9a-fA-F-]{36}\.html$' } | Select-Object -First 1
+        if (-not $gvHtml) { $gvHtml = $gvAll | Sort-Object Name | Select-Object -First 1 }
         if (-not $gvHtml) { return }
         Write-Action 'Läser Governance Visualizer-resultat'
         [void]$body.Append('<h2>Styrning (Governance Visualizer)</h2>')
@@ -1111,6 +1129,8 @@ try {
         if ($polCsv)  { $r = Import-CsvChecked $polCsv.FullName @() ';';  if ($null -ne $r) { [void]$body.Append((Tile 'Policytilldelningar' @($r).Count)) } }
         [void]$body.Append('</div>')
         [void]$body.Append("<p>Interaktiv rapport: <a href=`"$(RelLink $gvHtml.FullName)`">$(Esc $gvHtml.Name)</a></p>")
+        $gvOthers = @($gvAll | Where-Object { $_.FullName -ne $gvHtml.FullName })
+        if ($gvOthers.Count) { [void]$body.Append("<p class=`"muted`">Fler rapporter från verktyget ($($gvOthers.Count) st, t.ex. DefinitionInsights) finns i mappen azgovviz\.</p>") }
     }
 
     # --- Maester: läs JSON-resultatet ----------------------------------------

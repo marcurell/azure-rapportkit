@@ -19,10 +19,10 @@ Scriptet ändrar ingenting i Azure eller Entra. Det som installeras hamnar på d
 $dest = Join-Path $env:USERPROFILE 'rapportkit-kit'
 $zip  = Join-Path $env:TEMP 'azure-rapportkit.zip'
 New-Item -ItemType Directory -Force $dest | Out-Null
-Invoke-WebRequest 'https://github.com/marcurell/azure-rapportkit/archive/refs/tags/v1.0.4.zip' -OutFile $zip
+Invoke-WebRequest 'https://github.com/marcurell/azure-rapportkit/archive/refs/tags/v1.0.5.zip' -OutFile $zip
 Expand-Archive $zip $dest -Force
 Get-ChildItem $dest -Recurse | Unblock-File
-$script = Join-Path $dest 'azure-rapportkit-1.0.4\Run-Rapportkit.ps1'
+$script = Join-Path $dest 'azure-rapportkit-1.0.5\Run-Rapportkit.ps1'
 $arg = '-NoExit -ExecutionPolicy Bypass -File "' + $script + '"'
 Start-Process powershell -ArgumentList $arg
 ```
@@ -67,7 +67,11 @@ Kontot som loggar in behöver:
 
 **Rollerna kontrolleras direkt efter inloggningen (steg 3), innan något mer hämtas.** Saknas en roll visar scriptet vilka kommandon som lägger till den och frågar om du vill fortsätta ändå. Standardsvaret är nej, och då avslutas körningen med instruktionen. Global Administrator i Entra ID ger inte automatiskt Azure-roller: se avsnittet "Ge dig själv läsrätt på tenant root" nedan.
 
-Har kontot bara åtkomst till en subscription faller Governance Visualizer på behörighetskontrollen (tenant root kräver Reader). De andra stegen körs ändå.
+Har kontot bara åtkomst till en subscription faller Governance Visualizer på behörighetskontrollen, eftersom verktyget måste kunna läsa management group på tenant root. De andra stegen körs ändå.
+
+**Om rollen Reader:** Governance Visualizer kontrollerar bara att management group går att läsa, så vilken roll som ger läsrätten spelar ingen roll (även User Access Administrator räcker tekniskt). Reader rekommenderas eftersom den ger minst rättigheter. Har kontot fler roller än Reader skriver verktyget en "least privilege"-rekommendation; scriptet låter inte den pausa körningen. Rollen **Management Group Reader** är något annat än **Reader**: den ger bara läsrätt på gruppstrukturen, inte på resurserna.
+
+**Kontrollera scopet:** rollerna ska ligga på **Tenant Root Group** (Management groups > Tenant Root Group > Access control (IAM) > Role assignments), inte på en prenumeration eller resursgrupp.
 
 ## Steg
 
@@ -138,8 +142,9 @@ Slutkod: `0` = allt gick bra, `2` = något verktyg misslyckades men rapport finn
 | `AuthorizationFailed` eller tomma resultat | Kontrollera att rollerna är aktiva (PIM) och tilldelade på rätt scope |
 | Governance Visualizer: permission check FAILED, trots att du är Global Administrator | Global Administrator i Entra ID ger **inte** åtkomst till Azure-resurser. Höj åtkomsten tillfälligt: Entra ID > Properties > **Access management for Azure resources** = Yes. Tilldela sedan dig själv Reader (och Security Reader, Cost Management Reader) på scope `/`, och sätt reglaget tillbaka till No. Kommandon finns i avsnittet nedan |
 | Windows Defender: "Unauthorized changes blocked" för `pwsh.exe` | Kontrollerad mappåtkomst (ransomware-skydd) blockerar skrivning till en skyddad mapp. Notifieringen anger mappen: öppna Windows Security > Virus & threat protection > Ransomware protection > Block history. Låt scriptet skriva till en mapp som inte är skyddad (`-OutputRoot C:\rapportkit`) eller tillåt `C:\Program Files\PowerShell\7\pwsh.exe` under "Allow an app through Controlled folder access". Hanteras säkerhetsinställningen av IT får de göra det |
-| Governance Visualizer: permission check FAILED | Reader saknas på Tenant Root Group, eller ange `-ManagementGroupId` |
-| Governance Visualizer väntar på tangenttryckning | Tryck Enter. Det kommer av en behörighetsvarning från verktyget; scriptet kör vidare |
+| Governance Visualizer: `check FAILED` | Kontot kan inte läsa management group. Tilldela Reader på **Tenant Root Group** (kontrollera scopet), eller ange `-ManagementGroupId` |
+| Governance Visualizer visar "LEAST PRIVILEGE ADVICE" | Informationsmeddelande: kontot har fler roller än Reader. Inget fel; scriptet låter den inte pausa körningen |
+| Governance Visualizer stoppar på `classicAdministrators` (404) | Fixat: det pensionerade API:et hoppas över i den lokala kopian (klassiska administratörer rapporteras därför inte) |
 | `Connect-Maester` kräver godkännande | En Global Administrator måste ge admin consent för Microsoft Graph Command Line Tools |
 | Skript blockeras | `Set-ExecutionPolicy -Scope Process -ExecutionPolicy Bypass` i samma fönster |
 
@@ -152,5 +157,6 @@ MIT, se [LICENSE](LICENSE). Verktygen som scriptet hämtar har sina egna license
 ## Känt
 
 - Governance Visualizer hämtas i en fast version (6.7.2) som scriptet är testat mot.
-- Scriptet patchar den hämtade kopian av Governance Visualizer så att den inte ställer en y/n-fråga om moduler. Det kan sluta fungera om verktyget ändrar den koden.
+- Scriptet patchar den hämtade kopian av Governance Visualizer (den i `C:\rapportkit\Azure-Governance-Visualizer-6.7.2`, originalet på GitHub rörs inte) på tre ställen: ingen y/n-fråga om moduler, inga pauser på tangenttryckning, och det pensionerade classic administrators-API:et hoppas över. Patcharna är knutna till version 6.7.2 och kan sluta fungera om verktyget ändras; scriptet varnar om en patch inte kunde tillämpas.
+- Governance Visualizer körs med `-NoPIMEligibility` (kräver servicekonto) och `-NoALZPolicyVersionChecker` (kräver git och GitHub).
 - Resultatmapparna innehåller konfidentiell information. De ligger utanför repot och ska aldrig checkas in.
