@@ -19,10 +19,10 @@ Scriptet ändrar ingenting i Azure eller Entra. Det som installeras hamnar på d
 $dest = Join-Path $env:USERPROFILE 'rapportkit-kit'
 $zip  = Join-Path $env:TEMP 'azure-rapportkit.zip'
 New-Item -ItemType Directory -Force $dest | Out-Null
-Invoke-WebRequest 'https://github.com/marcurell/azure-rapportkit/archive/refs/tags/v1.0.1.zip' -OutFile $zip
+Invoke-WebRequest 'https://github.com/marcurell/azure-rapportkit/archive/refs/tags/v1.0.2.zip' -OutFile $zip
 Expand-Archive $zip $dest -Force
 Get-ChildItem $dest -Recurse | Unblock-File
-$script = Join-Path $dest 'azure-rapportkit-1.0.1\Run-Rapportkit.ps1'
+$script = Join-Path $dest 'azure-rapportkit-1.0.2\Run-Rapportkit.ps1'
 $arg = '-NoExit -ExecutionPolicy Bypass -File "' + $script + '"'
 Start-Process powershell -ArgumentList $arg
 ```
@@ -70,12 +70,13 @@ Har kontot bara åtkomst till en subscription faller Governance Visualizer på b
 ## Steg
 
 1. **Förberedelser**: tenant-ID, resultatmappar, loggfil.
-2. **Beroenden**: hämtar det som saknas. PowerShell 7, Azure CLI och azqr via winget (azqr annars direkt från GitHub), Governance Visualizer som zip från GitHub, moduler från PowerShell Gallery till `C:\rapportkit\_modules`.
-3. **Inloggning**: Azure CLI, Az PowerShell och valfritt Microsoft Graph.
-4. **Governance Visualizer**
-5. **azqr**
-6. **Maester**
-7. **HTML-rapport**
+2. **Förkontroll**: kontrollerar verktyg, nätverk (GitHub, PowerShell Gallery, inloggning, Azure, Graph), diskutrymme och om frågor kan besvaras, innan något hämtas. Saknas något visas det tydligt och du väljer om du vill fortsätta ändå.
+3. **Beroenden**: hämtar det som saknas. PowerShell 7, Azure CLI och azqr via winget (azqr annars direkt från GitHub), Governance Visualizer som zip från GitHub, moduler från PowerShell Gallery till `C:\rapportkit\_modules`.
+4. **Inloggning**: Azure CLI, Az PowerShell och valfritt Microsoft Graph. Därefter kontrolleras om kontot kan läsa management group som Governance Visualizer startar på; kan det inte får du välja att köra ändå eller hoppa över verktyget.
+5. **Governance Visualizer**
+6. **azqr**
+7. **Maester**
+8. **HTML-rapport**
 
 ## Flaggor
 
@@ -88,6 +89,7 @@ Har kontot bara åtkomst till en subscription faller Governance Visualizer på b
 | `-NoInstall` | Hämta och installera ingenting |
 | `-Offline` | Ladda inte ner något, använd bara `tools\` (se nedan) |
 | `-ReportOnly` | Bygg bara om HTML-rapporten från befintliga resultat |
+| `-Yes` | Svara ja på alla "fortsätta ändå?"-frågor (för automatiska körningar) |
 | `-OutputRoot` / `-Period` | Annan resultatmapp / månadsmapp |
 
 ## Offline-bundle

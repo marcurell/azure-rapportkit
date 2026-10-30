@@ -6,19 +6,21 @@
 .DESCRIPTION
   Scriptet gör följande, i ordning (varje steg skriver ut vad som händer medan det körs):
 
-    Steg 1  Förberedelser    Tenant-ID, resultatmappar, loggfil, förkontroller (internet, diskutrymme)
-    Steg 2  Beroenden        Laddar ner och installerar det som saknas på den här datorn:
+    Steg 1  Förberedelser    Tenant-ID, resultatmappar, loggfil
+    Steg 2  Förkontroll      Kontrollerar förutsättningar (verktyg, nätverk, disk) innan något hämtas, och
+                             låter dig välja om du vill fortsätta även om något saknas
+    Steg 3  Beroenden        Laddar ner och installerar det som saknas på den här datorn:
                                - PowerShell 7           (winget)
                                - Azure CLI              (winget)
                                - azqr                   (winget, annars direktnedladdning från GitHub)
                                - Azure Governance Visualizer (zip från GitHub, fast version)
                                - PowerShell-moduler Az.Accounts, AzAPICall, Pester, Maester (PSGallery)
                              Varje nedladdning verifieras (storlek, zip-integritet, förväntade filer).
-    Steg 3  Inloggning       Azure CLI, Az PowerShell och (valfritt) Microsoft Graph
-    Steg 4  Governance Visualizer   Management groups, policies, rolltilldelningar
-    Steg 5  azqr                    Rekommendationer per resurs + Advisor + Defender
-    Steg 6  Maester                 Tester av Entra ID (valfritt)
-    Steg 7  HTML-rapport     Sammanfattning i <resultatmapp>\rapport.html. Resultatfilerna kontrolleras
+    Steg 4  Inloggning       Azure CLI, Az PowerShell och (valfritt) Microsoft Graph, samt kontroll av behörighet
+    Steg 5  Governance Visualizer   Management groups, policies, rolltilldelningar
+    Steg 6  azqr                    Rekommendationer per resurs + Advisor + Defender
+    Steg 7  Maester                 Tester av Entra ID (valfritt)
+    Steg 8  HTML-rapport     Sammanfattning i <resultatmapp>\rapport.html. Resultatfilerna kontrolleras
                              innan de läses; avvikelser visas som varningar i rapporten.
 
   Allt är read-only: inget i Azure eller Entra ändras. Det som installeras hamnar på den här
@@ -51,6 +53,8 @@
   Ladda inte ner något från internet; använd bara mappen tools\ (se Build-Bundle.ps1).
 .PARAMETER ReportOnly
   Kör inga verktyg, bygg bara om HTML-rapporten från befintliga resultat.
+.PARAMETER Yes
+  Svara ja på alla "fortsätta ändå?"-frågor (förkontroll och behörighetskontroll), t.ex. för automatiska körningar.
 
 .EXAMPLE
   .\Run-Rapportkit.ps1
@@ -69,7 +73,8 @@ param(
     [switch]$DeviceLogin,
     [switch]$NoInstall,
     [switch]$Offline,
-    [switch]$ReportOnly
+    [switch]$ReportOnly,
+    [switch]$Yes
 )
 
 # Avbryt vid fel som standard. Varje verktygssteg fångar sina egna fel (try/catch) så att ett
@@ -85,7 +90,7 @@ foreach ($k in $PSBoundParameters.Keys) { $BoundParams[$k] = $PSBoundParameters[
 
 $ScriptRoot = Split-Path -Parent $PSCommandPath
 $ToolsDir = Join-Path $ScriptRoot 'tools'        # används bara för offline-bundle
-$TotalSteps = 7
+$TotalSteps = 8
 # Governance Visualizer hämtas som en fast version (den som testats). Ändras med flit, inte av misstag.
 $GvVersion = '6.7.2'
 $GvUrl = "https://github.com/Azure/Azure-Governance-Visualizer/archive/refs/tags/$GvVersion.zip"
@@ -164,6 +169,21 @@ function Update-SessionPath {
 
 # Finns kommandot på datorn?
 function Test-Cmd($name) { [bool](Get-Command $name -ErrorAction SilentlyContinue) }
+
+# Går adressen att nå? Ett HTTP-svar (även 401/403/405) räknas som nåbart; bara uteblivet svar är fel.
+function Test-Endpoint([string]$Url) {
+    try { Invoke-WebRequest -Uri $Url -Method Head -TimeoutSec 8 -UseBasicParsing | Out-Null; return $true }
+    catch { return [bool]$_.Exception.Response }
+}
+
+# Ställer en ja/nej-fråga. Standardsvaret är nej. -Yes svarar ja. Kan frågan inte ställas
+# (ingen inmatning, t.ex. automatisk körning) fortsätter vi.
+function Confirm-Continue([string]$Question) {
+    if ($Yes) { Write-Host "  $Question -> ja (-Yes)" -ForegroundColor DarkCyan; return $true }
+    try { $a = Read-Host "  $Question (j/N)" }
+    catch { Write-Warn2 'Frågan kan inte ställas (ingen inmatning). Fortsätter.'; return $true }
+    return [bool](("$a").Trim([char]0xFEFF).Trim() -match '^[jJyY]')
+}
 
 # Är filen en hel zip som innehåller (minst) en post som matchar $MustContain?
 function Test-Zip([string]$Path, [string]$MustContain) {
@@ -352,25 +372,90 @@ try {
     # Logga allt som skrivs i fönstret till en fil (bra att skicka med vid felsökning).
     try { Start-Transcript -Path (Join-Path $RunDir 'rapportkit.log') -Append | Out-Null; $TranscriptStarted = $true } catch { Write-Warn2 'Kunde inte starta loggfil (fortsätter ändå).' }
 
-    # Förkontroller: ledigt diskutrymme och internetåtkomst. Båda ger bara varning, inget avbrott.
-    try {
-        $drive = Get-PSDrive -Name ($RunDir.Substring(0, 1)) -ErrorAction Stop
-        if ($drive.Free -lt 1GB) { Write-Warn2 ("Lite diskutrymme kvar på {0}: ({1:N1} GB). Rekommenderat minst 1 GB." -f $drive.Name, ($drive.Free / 1GB)) }
-    }
-    catch { }
-    if (-not $Offline -and -not $NoInstall -and -not $ReportOnly) {
-        try { Invoke-WebRequest -Uri 'https://github.com' -Method Head -TimeoutSec 10 -UseBasicParsing | Out-Null; Write-Ok 'Internetåtkomst (github.com) fungerar' }
-        catch { Write-Warn2 "Kunde inte nå github.com ($($_.Exception.Message)). Nedladdningar kan misslyckas: kontrollera proxy/brandvägg." }
-    }
-
-    if ($ReportOnly) { Write-Host "`n  -ReportOnly: hoppar över steg 2-6 och bygger bara rapporten." -ForegroundColor DarkCyan }
+    if ($ReportOnly) { Write-Host "`n  -ReportOnly: hoppar över steg 2-7 och bygger bara rapporten." -ForegroundColor DarkCyan }
     else {
 
         # ===================================================================
-        # STEG 2: Beroenden. Varje verktyg hämtas för sig; misslyckas ett stängs just det
+        # STEG 2: Förkontroll. Kontrollerar förutsättningarna INNAN något hämtas eller installeras,
+        # visar vad som saknas och låter dig välja om du vill fortsätta ändå.
+        # ===================================================================
+        Write-Step 2 'Förkontroll av förutsättningar' 'Kontrollerar att allt som behövs finns eller går att hämta, innan något installeras. Saknas något får du välja om du vill fortsätta ändå.'
+        $checks = [System.Collections.Generic.List[object]]::new()
+        function Add-Check([string]$State, [string]$Name, [string]$Detail) { $checks.Add([pscustomobject]@{ State = $State; Name = $Name; Detail = $Detail }) }
+
+        # Program och moduler: finns de redan, eller måste de hämtas?
+        $need = [System.Collections.Generic.List[string]]::new()
+        $wingetNeeded = $false
+        if (-not $SkipAzqr) {
+            if (-not (Test-Cmd az)) { $need.Add('Azure CLI (winget)'); $wingetNeeded = $true }
+            if (-not (Test-Cmd azqr) -and -not (Test-Path (Join-Path $env:LOCALAPPDATA 'azqr\azqr.exe'))) { $need.Add('azqr (winget/GitHub)'); $wingetNeeded = $true }
+        }
+        if (-not $SkipGovViz) {
+            if (-not (Test-Path (Join-Path $GvDir 'pwsh\AzGovVizParallel.ps1'))) { $need.Add("Governance Visualizer $GvVersion (GitHub)") }
+            foreach ($m in 'Az.Accounts', 'AzAPICall') { if (-not (Get-Module -ListAvailable -Name $m)) { $need.Add("modulen $m (PSGallery)") } }
+        }
+        if (-not $SkipMaester) {
+            if (-not (Get-Module -ListAvailable -Name Pester | Where-Object { $_.Version -ge [version]'5.5.0' })) { $need.Add('modulen Pester 5.5+ (PSGallery)') }
+            if (-not (Get-Module -ListAvailable -Name Maester)) { $need.Add('modulen Maester (PSGallery)') }
+        }
+        if (-not $need.Count) { Add-Check 'OK' 'Verktyg' 'allt som behövs finns redan på datorn' }
+        elseif ($NoInstall) { Add-Check 'SAKNAS' 'Verktyg' "saknas men -NoInstall är satt: $($need -join ', ')" }
+        elseif ($Offline) {
+            if (Test-Path $ToolsDir) { Add-Check 'INFO' 'Verktyg' "hämtas från tools\ (offline): $($need -join ', ')" }
+            else { Add-Check 'SAKNAS' 'Verktyg' "-Offline är satt men mappen tools\ saknas. Behövs: $($need -join ', ')" }
+        }
+        else { Add-Check 'INFO' 'Verktyg' "hämtas/installeras: $($need -join ', ')" }
+
+        # winget behövs för Azure CLI och azqr (azqr har en reservväg via GitHub).
+        if ($wingetNeeded -and -not $NoInstall -and -not $Offline) {
+            if (Test-Cmd winget) { Add-Check 'OK' 'winget' 'finns' }
+            else { Add-Check 'SAKNAS' 'winget' 'finns inte: Azure CLI måste installeras manuellt (https://aka.ms/installazurecliwindows)' }
+        }
+
+        # Nätverk: det som behövs för nedladdning, och det som behövs för inloggning och körning.
+        $endpoints = @()
+        if ($need.Count -and -not $Offline -and -not $NoInstall) {
+            if (@($need -match 'GitHub|winget').Count) { $endpoints += , @('github.com', 'https://github.com', 'hämtar Governance Visualizer/azqr') }
+            if (@($need -match 'PSGallery').Count) { $endpoints += , @('www.powershellgallery.com', 'https://www.powershellgallery.com', 'hämtar PowerShell-moduler') }
+        }
+        $endpoints += , @('login.microsoftonline.com', 'https://login.microsoftonline.com', 'inloggning')
+        if (-not $SkipGovViz -or -not $SkipAzqr) { $endpoints += , @('management.azure.com', 'https://management.azure.com', 'Azure Resource Manager') }
+        if (-not $SkipMaester) { $endpoints += , @('graph.microsoft.com', 'https://graph.microsoft.com', 'Microsoft Graph (Maester)') }
+        foreach ($e in $endpoints) {
+            if (Test-Endpoint $e[1]) { Add-Check 'OK' "Nätverk $($e[0])" $e[2] }
+            else { Add-Check 'SAKNAS' "Nätverk $($e[0])" "går inte att nå ($($e[2])). Kontrollera internet, proxy och brandvägg." }
+        }
+
+        # Diskutrymme, Windows-behörighet och om frågor kan besvaras.
+        try {
+            $drive = Get-PSDrive -Name ($RunDir.Substring(0, 1)) -ErrorAction Stop
+            if ($drive.Free -lt 1GB) { Add-Check 'VARNING' 'Diskutrymme' ("bara {0:N1} GB kvar på {1}: (minst 1 GB rekommenderas)" -f ($drive.Free / 1GB), $drive.Name) }
+            else { Add-Check 'OK' 'Diskutrymme' ("{0:N1} GB ledigt på {1}:" -f ($drive.Free / 1GB), $drive.Name) }
+        }
+        catch { }
+        $isAdmin = ([Security.Principal.WindowsPrincipal][Security.Principal.WindowsIdentity]::GetCurrent()).IsInRole([Security.Principal.WindowsBuiltInRole]::Administrator)
+        Add-Check 'INFO' 'Windows-behörighet' $(if ($isAdmin) { 'förhöjd (administratör). Krävs inte.' } else { 'vanlig användare. Räcker; Windows kan be om godkännande (UAC) vid installation av PowerShell 7/Azure CLI.' })
+        if ([Console]::IsInputRedirected) { Add-Check 'VARNING' 'Interaktivt fönster' 'inmatning är omdirigerad: frågor går inte att besvara och inloggning kan misslyckas' }
+        Add-Check 'INFO' 'Behörigheter i Azure' 'kontrolleras efter inloggningen (steg 4): Reader på management group för Governance Visualizer, Global Admin-godkännande för Maester'
+
+        foreach ($c in $checks) {
+            $color = switch ($c.State) { 'OK' { 'Green' } 'INFO' { 'Cyan' } 'VARNING' { 'Yellow' } default { 'Red' } }
+            Write-Host ("  [{0,-7}] {1}: {2}" -f $c.State, $c.Name, $c.Detail) -ForegroundColor $color
+        }
+        $problems = @($checks | Where-Object { $_.State -in 'SAKNAS', 'VARNING' })
+        if ($problems.Count) {
+            Write-Host ''
+            if (-not (Confirm-Continue "$($problems.Count) förutsättning(ar) saknas eller är osäkra (se ovan). Fortsätta ändå?")) {
+                Fail 'Avbrutet på din begäran efter förkontrollen.' 'Åtgärda det som är markerat SAKNAS/VARNING ovan och kör om scriptet.'
+            }
+        }
+        else { Write-Ok 'Förkontrollen gav inga anmärkningar' }
+
+        # ===================================================================
+        # STEG 3: Beroenden. Varje verktyg hämtas för sig; misslyckas ett stängs just det
         # verktyget av (status "Fel") och de andra körs vidare.
         # ===================================================================
-        Write-Step 2 'Hämtar och installerar beroenden' 'Bara det som saknas på den här datorn. Första gången tar det 5-10 minuter.'
+        Write-Step 3 'Hämtar och installerar beroenden' 'Bara det som saknas på den här datorn. Första gången tar det 5-10 minuter.'
         if ($NoInstall) { Write-Warn2 '-NoInstall: hoppar över all hämtning och installation.' }
 
         # Azure CLI (behövs bara av azqr: används för inloggning).
@@ -459,10 +544,10 @@ try {
         }
 
         # ===================================================================
-        # STEG 3: Inloggning. Misslyckas en inloggning stängs bara de verktyg som behöver
+        # STEG 4: Inloggning. Misslyckas en inloggning stängs bara de verktyg som behöver
         # den av; resten körs.
         # ===================================================================
-        Write-Step 3 'Inloggning' 'Du loggar in med ett konto som har läsrättigheter (se README). Ett webbläsarfönster öppnas för varje inloggning. Hinner du inte: tryck Ctrl+C och kör om scriptet.'
+        Write-Step 4 'Inloggning' 'Du loggar in med ett konto som har läsrättigheter (se README). Ett webbläsarfönster öppnas för varje inloggning. Hinner du inte: tryck Ctrl+C och kör om scriptet.'
 
         # 3a. Azure CLI (används av azqr)
         if (-not $SkipAzqr) {
@@ -519,14 +604,31 @@ try {
             }
         }
 
+        # 4d. Behörighetskontroll: ser kontot den management group som Governance Visualizer startar på?
+        # Förutsägs ett fel får du välja att köra ändå eller hoppa över verktyget.
+        if (-not $SkipGovViz) {
+            $mgCheck = if ($ManagementGroupId) { $ManagementGroupId } else { $TenantId }
+            Write-Action "Kontrollerar att kontot kan läsa management group '$mgCheck'"
+            $code = $null
+            try { $code = (Invoke-AzRestMethod -Method GET -Path "/providers/Microsoft.Management/managementGroups/${mgCheck}?api-version=2021-04-01").StatusCode } catch { }
+            if ($code -eq 200) { Write-Ok "Management group '$mgCheck' är läsbar" }
+            else {
+                Write-Warn2 "Kontot kan inte läsa management group '$mgCheck' (svar: $code). Governance Visualizer kommer sannolikt att misslyckas. Reader behövs på tenant root (se README), eller ange en annan grupp med -ManagementGroupId."
+                if (-not (Confirm-Continue 'Köra Governance Visualizer ändå?')) {
+                    $SkipGovViz = $true
+                    Set-Status 'Governance Visualizer' 'Hoppad över' "Valdes bort efter behörighetskontrollen: Reader saknas på management group '$mgCheck'."
+                }
+            }
+        }
+
         if ($SkipGovViz -and $SkipAzqr -and $SkipMaester) {
-            Fail 'Ingen inloggning lyckades, så inget verktyg kan köras.' 'Se meddelandena ovan, logga in och kör om scriptet (installationen är redan gjord, så det går snabbt).'
+            Fail 'Inget verktyg återstår att köra: alla är bortvalda eller saknar inloggning/behörighet.' 'Se meddelandena ovan, åtgärda (logga in, få rätt roll) och kör om scriptet. Installationen är redan gjord, så det går snabbt.'
         }
 
         # ===================================================================
-        # STEG 4: Azure Governance Visualizer
+        # STEG 5: Azure Governance Visualizer
         # ===================================================================
-        Write-Step 4 'Azure Governance Visualizer' 'Går igenom management groups, subscriptions, policies och roller. 10-45 min i stora miljöer, några minuter i små. Mycket text i fönstret är normalt.'
+        Write-Step 5 'Azure Governance Visualizer' 'Går igenom management groups, subscriptions, policies och roller. 10-45 min i stora miljöer, några minuter i små. Mycket text i fönstret är normalt.'
         if ($SkipGovViz) { Write-Action 'Hoppas över'; Set-SkippedUnlessFailed 'Governance Visualizer' }
         else {
             try {
@@ -567,9 +669,9 @@ try {
         }
 
         # ===================================================================
-        # STEG 5: azqr
+        # STEG 6: azqr
         # ===================================================================
-        Write-Step 5 'Azure Quick Review (azqr)' 'Skannar alla subscriptions du har läsrätt till. 1-30 min.'
+        Write-Step 6 'Azure Quick Review (azqr)' 'Skannar alla subscriptions du har läsrätt till. 1-30 min.'
         if ($SkipAzqr) { Write-Action 'Hoppas över'; Set-SkippedUnlessFailed 'azqr' }
         else {
             try {
@@ -592,16 +694,17 @@ try {
         }
 
         # ===================================================================
-        # STEG 6: Maester
+        # STEG 7: Maester
         # ===================================================================
-        Write-Step 6 'Maester (Entra ID-tester)' 'Valfritt. 10-20 min.'
+        Write-Step 7 'Maester (Entra ID-tester)' 'Valfritt. 10-20 min.'
         if ($SkipMaester) { Write-Action 'Hoppas över'; Set-SkippedUnlessFailed 'Maester' }
         else {
             try {
                 Push-Location $Dirs.maester
                 Import-Module Maester -ErrorAction Stop
                 $testsDir = Join-Path $Dirs.maester 'maester-tests'
-                if (-not (Test-Path $testsDir)) { Write-Action 'Hämtar Maesters testsvit (Install-MaesterTests)'; Install-MaesterTests }
+                # -Path anges uttryckligen: utan den hamnar testerna i processens arbetsmapp (t.ex. C:\Windows\System32 när man kör som admin).
+                if (-not (Test-Path $testsDir)) { Write-Action 'Hämtar Maesters testsvit (Install-MaesterTests)'; Install-MaesterTests -Path $testsDir }
                 if (-not (Test-Path $testsDir)) { throw 'Maesters testsvit hämtades inte (mappen maester-tests saknas). Kontrollera internetanslutningen och kör om.' }
                 Write-Action 'Kör Invoke-Maester'
                 Invoke-Maester -Path $testsDir -OutputFolder (Join-Path $Dirs.maester 'test-results') `
@@ -616,10 +719,10 @@ try {
     }
 
     # =======================================================================
-    # STEG 7: HTML-rapport. Varje avsnitt byggs för sig; går ett avsnitt inte att bygga
+    # STEG 8: HTML-rapport. Varje avsnitt byggs för sig; går ett avsnitt inte att bygga
     # blir det en varning i rapporten, inte ett avbrott.
     # =======================================================================
-    Write-Step 7 'Bygger HTML-rapport' 'Kontrollerar och läser resultatfilerna och skriver rapport.html.'
+    Write-Step 8 'Bygger HTML-rapport' 'Kontrollerar och läser resultatfilerna och skriver rapport.html.'
     Add-Type -AssemblyName System.Web
 
     # HTML-koda text. (Får inte heta H: det är ett alias för Get-History.)
