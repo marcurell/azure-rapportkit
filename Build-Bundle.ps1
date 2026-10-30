@@ -119,6 +119,7 @@ New-Item -ItemType Directory $stage | Out-Null
 foreach ($file in 'Run-Rapportkit.ps1', 'README.md', 'LICENSE', 'THIRD-PARTY-NOTICES.md') { Copy-Item (Join-Path $PSScriptRoot $file) $stage }
 New-Item -ItemType Directory "$stage\docs" | Out-Null
 Copy-Item (Join-Path $PSScriptRoot 'docs\KUNDINFO.md') "$stage\docs"
+foreach ($dir in 'lib', 'branding') { Copy-Item (Join-Path $PSScriptRoot $dir) "$stage\$dir" -Recurse }
 Copy-Item $tools "$stage\tools" -Recurse
 Compress-Archive "$stage\*" $Out
 Remove-Item $stage -Recurse -Force

@@ -1,0 +1,49 @@
+{
+  "name": "Neutral",
+  "reportTitle": "Azure Rapportkit",
+  "tagline": "",
+  "logo": {
+    "type": "wordmark",
+    "parts": [
+      { "text": "Azure", "color": "text" },
+      { "text": "Rapportkit", "color": "accent" }
+    ]
+  },
+  "colors": {
+    "light": {
+      "bg": "#f6f8fa",
+      "surface": "#ffffff",
+      "surfaceAlt": "#eef2f6",
+      "border": "#d0d7de",
+      "text": "#1f2328",
+      "muted": "#59636e",
+      "accent": "#0969da",
+      "accentText": "#0550ae",
+      "onAccent": "#ffffff"
+    },
+    "dark": {
+      "bg": "#0d1117",
+      "surface": "#161b22",
+      "surfaceAlt": "#1c2128",
+      "border": "#30363d",
+      "text": "#e6edf3",
+      "muted": "#8b949e",
+      "accent": "#2f81f7",
+      "accentText": "#79c0ff",
+      "onAccent": "#ffffff"
+    },
+    "status": {
+      "high": "#cf222e",
+      "medium": "#bf8700",
+      "low": "#0969da",
+      "ok": "#1a7f37"
+    }
+  },
+  "fonts": {
+    "body": "system-ui, \"Segoe UI\", Roboto, Helvetica, Arial, sans-serif",
+    "heading": "system-ui, \"Segoe UI\", Roboto, Helvetica, Arial, sans-serif"
+  },
+  "footer": "",
+  "contact": { "text": "", "url": "" },
+  "customCss": ""
+}

@@ -68,6 +68,10 @@
 .PARAMETER MaxPortalSubscriptions
   Högst så många (aktiva) prenumerationer hämtas Defender- och kostnadsdata för (standard 25). Cost Management
   begränsar anrop hårt, så hundratals prenumerationer tar timmar.
+.PARAMETER Brand
+  Rapportens utseende: namnet på ett tema i branding\ (standard molnpasvenska). Se branding\README.md.
+.PARAMETER BrandPath
+  Sökväg till en tema-mapp (med theme.json) var som helst. Går före -Brand.
 .PARAMETER HidePersonalData
   Dölj användardata (namn och e-postadresser i rolltilldelningar) i Governance Visualizers rapport. Gäller inte
   Maesters rapport, som kan innehålla användarnamn.
@@ -104,6 +108,8 @@ param(
     [switch]$ReportOnly,
     [switch]$SkipPortal,
     [int]$MaxPortalSubscriptions = 25,
+    [string]$Brand = 'molnpasvenska',
+    [string]$BrandPath,
     [switch]$HidePersonalData,
     [switch]$KeepLogin,
     [switch]$NoZip,
@@ -134,7 +140,7 @@ $TotalSteps = 10
 # Governance Visualizer hämtas som en fast version (den som testats). Ändras med flit, inte av misstag.
 $GvVersion = '6.7.2'
 $GvUrl = "https://github.com/Azure/Azure-Governance-Visualizer/archive/refs/tags/$GvVersion.zip"
-$KitVersion = '1.0.7'
+$KitVersion = '1.0.8'
 
 # Testade (pinnade) verktygsversioner, och kontrollsummor (SHA256) för de zip-filer som hämtas direkt. Då får kunden
 # samma verktyg som vi har testat, och en ändrad fil upptäcks. Verktygen installerade via winget kontrolleras av winget
@@ -651,7 +657,7 @@ function Write-RunSummary([int]$Code) {
         exitCode        = $Code
         tenantId        = $TenantId
         period          = $Period
-        options         = [ordered]@{ hidePersonalData = [bool]$HidePersonalData; latestTools = [bool]$LatestTools; offline = [bool]$Offline; skipGovViz = [bool]$SkipGovViz; skipAzqr = [bool]$SkipAzqr; skipMaester = [bool]$SkipMaester; skipPortal = [bool]$SkipPortal; managementGroupId = $ManagementGroupId; maxPortalSubscriptions = $MaxPortalSubscriptions }
+        options         = [ordered]@{ brand = $(if ($BrandPath) { $BrandPath } else { $Brand }); hidePersonalData = [bool]$HidePersonalData; latestTools = [bool]$LatestTools; offline = [bool]$Offline; skipGovViz = [bool]$SkipGovViz; skipAzqr = [bool]$SkipAzqr; skipMaester = [bool]$SkipMaester; skipPortal = [bool]$SkipPortal; managementGroupId = $ManagementGroupId; maxPortalSubscriptions = $MaxPortalSubscriptions }
         environment     = [ordered]@{ os = [Environment]::OSVersion.VersionString; powershell = $PSVersionTable.PSVersion.ToString(); computer = $env:COMPUTERNAME }
         tools           = [ordered]@{ governanceVisualizer = $GvVersion; azqrPinned = $Pins.Azqr; azAccounts = (Get-ModuleVersionText 'Az.Accounts'); maester = (Get-ModuleVersionText 'Maester'); pester = (Get-ModuleVersionText 'Pester') }
         results         = @($Status.Keys | ForEach-Object { [ordered]@{ name = $_; state = $Status[$_].State; note = $Status[$_].Note } })
@@ -1445,302 +1451,13 @@ try {
     # STEG 10: HTML-rapport. Varje avsnitt byggs för sig; går ett avsnitt inte att bygga
     # blir det en varning i rapporten, inte ett avbrott.
     # =======================================================================
-    Write-Step 10 'Bygger HTML-rapport' 'Kontrollerar och läser resultatfilerna och skriver rapport.html.'
-    Add-Type -AssemblyName System.Web
-
-    # HTML-koda text. (Får inte heta H: det är ett alias för Get-History.)
-    function Esc($s) { [System.Web.HttpUtility]::HtmlEncode([string]$s) }
-
-    # Bygger en HTML-tabell av objekt. $cols = lista med @{Name=<egenskap>; Label=<rubrik>}.
-    function ConvertTo-HtmlTable($rows, $cols, $max = 25) {
-        if (-not $rows) { return '<p class="muted">Inga rader.</p>' }
-        $sb = [System.Text.StringBuilder]::new()
-        [void]$sb.Append('<table><thead><tr>')
-        foreach ($c in $cols) { [void]$sb.Append("<th>$(Esc $c.Label)</th>") }
-        [void]$sb.Append('</tr></thead><tbody>')
-        foreach ($r in @($rows) | Select-Object -First $max) {
-            [void]$sb.Append('<tr>')
-            foreach ($c in $cols) {
-                $v = $r.($c.Name)
-                $cls = ''
-                # Impact/Result visas som färgade märken.
-                if ($c.Name -in 'Impact', 'Result', 'Status') { $cls = " class=`"pill $(([string]$v).ToLower())`"" }
-                [void]$sb.Append("<td><span$cls>$(Esc $v)</span></td>")
-            }
-            [void]$sb.Append('</tr>')
-        }
-        [void]$sb.Append('</tbody></table>')
-        $extra = @($rows).Count - $max
-        if ($extra -gt 0) { [void]$sb.Append("<p class=`"muted`">…och $extra rader till (se fullständig fil).</p>") }
-        $sb.ToString()
-    }
-
-    function Tile($label, $value, $cls = '') { "<div class=`"tile $cls`"><div class=`"v`">$(Esc $value)</div><div class=`"l`">$(Esc $label)</div></div>" }
-    # Relativ länk från rapport.html till en fil under resultatmappen.
-    function RelLink($path) { (($path.Substring($RunDir.Length + 1)) -replace '\\', '/') }
-    # Kör ett avsnitt; fel blir en varning istället för ett avbrott.
-    # (Parametern får inte heta $Body: PowerShell skiljer inte på versaler och den skulle skugga $body nedan.)
-    function Invoke-Section([string]$Name, [scriptblock]$Action) {
-        try { & $Action } catch { Add-Warning "Avsnittet '$Name' i rapporten kunde inte byggas: $($_.Exception.Message)" }
-    }
-
-    $body = [System.Text.StringBuilder]::new()
-
-    # --- azqr: läs CSV-filerna azqr skrev ------------------------------------
-    Invoke-Section 'azqr' {
-        $impFile = Get-ChildItem $Dirs.azqr -Filter '*.impacted.csv' -ErrorAction SilentlyContinue | Select-Object -First 1
-        if (-not $impFile) { return }
-        Write-Action 'Läser azqr-resultat'
-        $imp = Import-CsvChecked $impFile.FullName @('Impact', 'Category', 'Recommendation', 'Resource Name')
-        $invFile = Get-ChildItem $Dirs.azqr -Filter '*.inventory.csv' | Select-Object -First 1
-        $inv = if ($invFile) { Import-CsvChecked $invFile.FullName @('Resource Type', 'Subscription Id') } else { $null }
-        $xl = Get-ChildItem $Dirs.azqr -Filter '*.xlsx' | Select-Object -First 1
-        $xlLink = if ($xl) { "<p>Fullständig rapport: <a href=`"$(RelLink $xl.FullName)`">$(Esc $xl.Name)</a></p>" } else { '' }
-        if ($null -eq $imp -or $null -eq $inv) {
-            [void]$body.Append('<h2>Resurser och rekommendationer (azqr)</h2><p class="muted">Kunde inte sammanfatta azqr-resultatet (se varningar). Använd den fullständiga rapporten.</p>' + $xlLink)
-            return
-        }
-        $subs = @($inv | Select-Object -ExpandProperty 'Subscription Id' -Unique).Count
-        $hi = @($imp | Where-Object Impact -eq 'High').Count
-        $me = @($imp | Where-Object Impact -eq 'Medium').Count
-        $lo = @($imp | Where-Object Impact -eq 'Low').Count
-        [void]$body.Append('<h2>Resurser och rekommendationer (azqr)</h2><div class="tiles">')
-        [void]$body.Append((Tile 'Resurser' @($inv).Count) + (Tile 'Subscriptions' $subs) + (Tile 'Hög påverkan' $hi 'high') + (Tile 'Medel' $me 'medium') + (Tile 'Låg' $lo 'low') + '</div>')
-
-        $byType = $inv | Group-Object 'Resource Type' | Sort-Object Count -Descending | ForEach-Object { [pscustomobject]@{ Typ = $_.Name; Antal = $_.Count } }
-        [void]$body.Append('<h3>Resurser per typ</h3>' + (ConvertTo-HtmlTable $byType @(@{Name='Typ';Label='Resurstyp'}, @{Name='Antal';Label='Antal'}) 15))
-
-        $byCat = $imp | Group-Object Category | Sort-Object Count -Descending | ForEach-Object { [pscustomobject]@{ Kategori = $_.Name; Antal = $_.Count } }
-        [void]$body.Append('<h3>Avvikelser per kategori</h3>' + (ConvertTo-HtmlTable $byCat @(@{Name='Kategori';Label='Kategori'}, @{Name='Antal';Label='Antal'})))
-
-        $topRec = $imp | Where-Object Impact -eq 'High' | Group-Object Recommendation | Sort-Object Count -Descending |
-            ForEach-Object { [pscustomobject]@{ Impact = 'High'; Rekommendation = $_.Name; Resurser = $_.Count; Exempel = ($_.Group | Select-Object -First 3 -ExpandProperty 'Resource Name') -join ', ' } }
-        [void]$body.Append('<h3>Rekommendationer med hög påverkan</h3>' + (ConvertTo-HtmlTable $topRec @(@{Name='Impact';Label='Påverkan'}, @{Name='Rekommendation';Label='Rekommendation'}, @{Name='Resurser';Label='Resurser'}, @{Name='Exempel';Label='Exempel'}) 20))
-
-        # Azure Advisor-rekommendationer följer med i azqr-skanningen.
-        $advFile = Get-ChildItem $Dirs.azqr -Filter '*.advisor.csv' | Select-Object -First 1
-        if ($advFile) {
-            $adv = Import-CsvChecked $advFile.FullName @('Impact', 'Category', 'Resource Name', 'Description')
-            if ($null -ne $adv) {
-                [void]$body.Append("<h3>Azure Advisor ($(@($adv).Count) rekommendationer)</h3>" + (ConvertTo-HtmlTable ($adv | Sort-Object { switch ($_.Impact) { 'High' { 0 } 'Medium' { 1 } default { 2 } } }) @(@{Name='Impact';Label='Påverkan'}, @{Name='Category';Label='Kategori'}, @{Name='Resource Name';Label='Resurs'}, @{Name='Description';Label='Beskrivning'}) 15))
-            }
-        }
-        [void]$body.Append($xlLink)
-    }
-
-    # --- Governance Visualizer: länk till den interaktiva rapporten + enkla tal ----
-    Invoke-Section 'Governance Visualizer' {
-        $gvAll = @(Get-ChildItem $Dirs.azgovviz -Filter 'AzGovViz*.html' -Recurse -ErrorAction SilentlyContinue)
-        # Huvudrapporten heter AzGovViz_<version>_<datum>_<tid>_<tenant-ID>.html. Övriga (DefinitionInsights, en per
-        # prenumeration) är sidorapporter, och de kan vara mycket stora, så välj inte bara första bästa fil.
-        $gvHtml = $gvAll | Where-Object { $_.Name -match '_\d{8}_\d{6}_[0-9a-fA-F-]{36}\.html$' } | Select-Object -First 1
-        if (-not $gvHtml) { $gvHtml = $gvAll | Sort-Object Name | Select-Object -First 1 }
-        if (-not $gvHtml) { return }
-        Write-Action 'Läser Governance Visualizer-resultat'
-        [void]$body.Append('<h2>Styrning (Governance Visualizer)</h2>')
-        $csvs = Get-ChildItem $Dirs.azgovviz -Filter '*.csv' -Recurse -ErrorAction SilentlyContinue
-        $roleCsv = $csvs | Where-Object Name -like '*RoleAssignments*' | Select-Object -First 1
-        $polCsv  = $csvs | Where-Object Name -like '*PolicyAssignments*' | Select-Object -First 1
-        [void]$body.Append('<div class="tiles">')
-        if ($roleCsv) { $r = Import-CsvChecked $roleCsv.FullName @() ';'; if ($null -ne $r) { [void]$body.Append((Tile 'Rolltilldelningar' @($r).Count)) } }
-        if ($polCsv)  { $r = Import-CsvChecked $polCsv.FullName @() ';';  if ($null -ne $r) { [void]$body.Append((Tile 'Policytilldelningar' @($r).Count)) } }
-        [void]$body.Append('</div>')
-        [void]$body.Append("<p>Interaktiv rapport: <a href=`"$(RelLink $gvHtml.FullName)`">$(Esc $gvHtml.Name)</a></p>")
-        $gvOthers = @($gvAll | Where-Object { $_.FullName -ne $gvHtml.FullName })
-        if ($gvOthers.Count) { [void]$body.Append("<p class=`"muted`">Fler rapporter från verktyget ($($gvOthers.Count) st, t.ex. DefinitionInsights) finns i mappen azgovviz\.</p>") }
-    }
-
-    # --- Maester: läs JSON-resultatet ----------------------------------------
-    Invoke-Section 'Maester' {
-        $mj = Get-ChildItem $Dirs.maester -Filter '*.json' -Recurse -ErrorAction SilentlyContinue | Where-Object { $_.FullName -like '*test-results*' } | Select-Object -First 1
-        if (-not $mj) { return }
-        Write-Action 'Läser Maester-resultat'
-        $m = Get-Content $mj.FullName -Raw | ConvertFrom-Json
-        $props = @($m.PSObject.Properties.Name)
-        $missing = @('PassedCount', 'FailedCount', 'SkippedCount', 'Tests') | Where-Object { $props -notcontains $_ }
-        if ($missing) {
-            Add-Warning "maester.json saknar fälten: $($missing -join ', '). Filformatet kan ha ändrats; använd Maesters egen HTML-rapport."
-            return
-        }
-        [void]$body.Append('<h2>Entra ID-tester (Maester)</h2><div class="tiles">')
-        [void]$body.Append((Tile 'Godkända' $m.PassedCount 'ok') + (Tile 'Underkända' $m.FailedCount 'high') + (Tile 'Överhoppade' $m.SkippedCount) + '</div>')
-        $failed = @($m.Tests | Where-Object Result -eq 'Failed' | Select-Object -First 25 | ForEach-Object { [pscustomobject]@{ Result = 'Failed'; Test = $_.Name } })
-        [void]$body.Append('<h3>Underkända tester</h3>' + (ConvertTo-HtmlTable $failed @(@{Name='Result';Label='Resultat'}, @{Name='Test';Label='Test'}) 25))
-
-        # Tester som hoppades över: ange orsaken (oftast licens), så att läsaren vet vad som INTE kontrollerats.
-        $skipped = @($m.Tests | Where-Object Result -eq 'Skipped')
-        if ($skipped.Count) {
-            $labels = @{
-                NotLicensedEntraIDP1 = 'Licens saknas: Entra ID P1'; NotLicensedEntraIDP2 = 'Licens saknas: Entra ID P2'
-                NotLicensedEntraIDGovernance = 'Licens saknas: Entra ID Governance'; NotLicensedEntraIDP2OrGovernance = 'Licens saknas: Entra ID P2 eller Governance'
-                NotLicensedEntraWorkloadID = 'Licens saknas: Entra Workload ID'; NotLicensedIntune = 'Licens saknas: Intune'
-                NotLicensedEop = 'Licens saknas: Exchange Online Protection'; NotLicensedMdo = 'Licens saknas: Defender for Office 365'
-                NotLicensedMdoP1 = 'Licens saknas: Defender for Office 365 P1'; NotLicensedMdoP2 = 'Licens saknas: Defender for Office 365 P2'
-                NotLicensedExoDlp = 'Licens saknas: Exchange DLP'; NotLicensedAdvAudit = 'Licens saknas: Advanced Auditing'
-                NotLicensedDefenderXDR = 'Licens saknas: Defender XDR'; NotLicensedCustomerLockbox = 'Licens saknas: Customer Lockbox'
-                Error = 'Testet kunde inte köras (fel)'
-            }
-            $skipRows = $skipped | Group-Object {
-                $d = $_.ResultDetail
-                $k = if ($d -and $d.TestSkipped) { [string]$d.TestSkipped } else { 'Okänd orsak' }
-                # Fri text från testet ("Custom") används som orsak; markdown-länkar [text](url) kortas till text.
-                if ($k -eq 'Custom' -and $d.SkippedReason) { ([string]$d.SkippedReason) -replace '\[([^\]]+)\]\([^)]+\)', '$1' } else { $k }
-            } | Sort-Object Count -Descending | ForEach-Object {
-                [pscustomobject]@{
-                    Orsak  = $(if ($labels.ContainsKey($_.Name)) { $labels[$_.Name] } else { $_.Name })
-                    Antal  = $_.Count
-                    Exempel = ($_.Group | Select-Object -First 2 -ExpandProperty Name) -join '; '
-                }
-            }
-            $licSkipped = @($skipped | Where-Object { $_.ResultDetail.TestSkipped -like 'NotLicensed*' }).Count
-            [void]$body.Append("<h3>Tester som inte kunde köras ($($skipped.Count))</h3><p class=`"muted`">Dessa kontroller ingår <strong>inte</strong> i resultatet. $licSkipped av dem beror på att tenanten saknar en licens (t.ex. Entra ID P1/P2) och resten på att funktionen inte är aktiverad eller inte gick att läsa. Det säger alltså inget om huruvida inställningen är bra eller dålig.</p>" +
-                (ConvertTo-HtmlTable $skipRows @(@{Name='Orsak';Label='Orsak'}, @{Name='Antal';Label='Antal'}, @{Name='Exempel';Label='Exempel på test'}) 20))
-        }
-        $mh = Get-ChildItem $Dirs.maester -Filter '*.html' -Recurse | Select-Object -First 1
-        if ($mh) { [void]$body.Append("<p>Fullständig rapport: <a href=`"$(RelLink $mh.FullName)`">$(Esc $mh.Name)</a></p>") }
-    }
-
-    # --- Defender och kostnad: läs CSV-filerna som steg 9 sparade i portal\ ----------
-    Invoke-Section 'Defender och kostnad' {
-        $planF = Join-Path $Dirs.portal 'defender-planer.csv'
-        $scoreF = Join-Path $Dirs.portal 'secure-score.csv'
-        $recF = Join-Path $Dirs.portal 'defender-rekommendationer.csv'
-        $costF = Join-Path $Dirs.portal 'kostnad.csv'
-        [void]$body.Append('<h2>Defender och kostnad</h2>')
-        if (-not ((Test-Path $planF) -or (Test-Path $scoreF) -or (Test-Path $recF) -or (Test-Path $costF))) {
-            [void]$body.Append('<p class="muted">Ingen Defender- eller kostnadsdata hämtades (se körningsstatus ovan). Rollerna Security Reader och Cost Management Reader behövs.</p>')
-        }
-        else {
-            Write-Action 'Läser Defender- och kostnadsdata'
-            [void]$body.Append('<div class="tiles">')
-            # Secure Score
-            if (Test-Path $scoreF) {
-                $sc = Import-CsvChecked $scoreF @('Prenumeration', 'Poang', 'Max', 'Andel')
-                foreach ($r in @($sc)) {
-                    $pct = [math]::Round(([double]($r.Andel -replace ',', '.')) * 100)
-                    [void]$body.Append((Tile "Secure Score ($($r.Prenumeration))" ("{0} % ({1}/{2})" -f $pct, $r.Poang, $r.Max)))
-                }
-            }
-            # Defender-planer: hur många är på?
-            $plans = if (Test-Path $planF) { Import-CsvChecked $planF @('Prenumeration', 'Plan', 'Niva') } else { $null }
-            if ($null -ne $plans) {
-                $on = @($plans | Where-Object Niva -eq 'Standard').Count
-                [void]$body.Append((Tile 'Defender-planer påslagna' "$on av $(@($plans).Count)" $(if ($on -eq 0) { 'medium' } else { 'ok' })))
-            }
-            # Defender-rekommendationer som inte uppfylls
-            $recs = if (Test-Path $recF) { Import-CsvChecked $recF @('Rekommendation', 'Status', 'Allvarlighet', 'Resurs') } else { $null }
-            if ($null -ne $recs) {
-                $unh = @($recs | Where-Object Status -eq 'Unhealthy')
-                [void]$body.Append((Tile 'Rekommendationer: hög' @($unh | Where-Object Allvarlighet -eq 'High').Count 'high') + (Tile 'Medel' @($unh | Where-Object Allvarlighet -eq 'Medium').Count 'medium') + (Tile 'Låg' @($unh | Where-Object Allvarlighet -eq 'Low').Count 'low'))
-            }
-            # Kostnad
-            $costs = if (Test-Path $costF) { Import-CsvChecked $costF @('Prenumeration', 'Manad', 'Kostnad', 'Valuta') } else { $null }
-            if ($null -ne $costs -and @($costs).Count) {
-                foreach ($g in ($costs | Group-Object Valuta)) {
-                    $tot = ($g.Group | ForEach-Object { [double]($_.Kostnad -replace ',', '.') } | Measure-Object -Sum).Sum
-                    [void]$body.Append((Tile "Kostnad senaste 12 mån ($($g.Name))" ("{0:N0}" -f $tot)))
-                }
-            }
-            [void]$body.Append('</div>')
-
-            if ($null -ne $plans -and @($plans).Count) {
-                $planView = $plans | ForEach-Object { [pscustomobject]@{ Prenumeration = $_.Prenumeration; Plan = $_.Plan; Status = $(if ($_.Niva -eq 'Standard') { 'På' } else { 'Av' }) } }
-                [void]$body.Append('<h3>Defender-planer</h3>' + (ConvertTo-HtmlTable $planView @(@{Name='Prenumeration';Label='Prenumeration'}, @{Name='Plan';Label='Plan'}, @{Name='Status';Label='Status'}) 40))
-            }
-            # Secure Score per kontroll: poäng och antal osunda/friska resurser.
-            $ctrlF = Join-Path $Dirs.portal 'secure-score-kontroller.csv'
-            if (Test-Path $ctrlF) {
-                $ctrls = Import-CsvChecked $ctrlF @('Prenumeration', 'Kontroll', 'Poang', 'Max', 'Osunda', 'Friska')
-                if ($null -ne $ctrls -and @($ctrls).Count) {
-                    $ctrlView = @($ctrls | Where-Object { [int]$_.Max -gt 0 -or [int]$_.Osunda -gt 0 } | Sort-Object { -[int]$_.Osunda }, Kontroll | ForEach-Object {
-                            [pscustomobject]@{ Kontroll = $_.Kontroll; Poang = ('{0} av {1}' -f $_.Poang, $_.Max); Osunda = $_.Osunda; Friska = $_.Friska } })
-                    [void]$body.Append('<h3>Secure Score per kontroll</h3><p class="muted">Poäng och antal osunda respektive friska resurser per kontroll. Tabellen är mer tillförlitlig än listan över enskilda rekommendationer nedan, som Azures API ibland returnerar ofullständig.</p>' + (ConvertTo-HtmlTable $ctrlView @(@{Name='Kontroll';Label='Kontroll'}, @{Name='Poang';Label='Poäng'}, @{Name='Osunda';Label='Osunda resurser'}, @{Name='Friska';Label='Friska resurser'}) 30))
-                }
-            }
-            if ($null -ne $recs -and @($recs | Where-Object Status -eq 'Unhealthy').Count) {
-                $sevOrder = @{ High = 0; Medium = 1; Low = 2 }
-                $recView = @($recs | Where-Object Status -eq 'Unhealthy' | Sort-Object { if ($sevOrder.ContainsKey($_.Allvarlighet)) { $sevOrder[$_.Allvarlighet] } else { 3 } } |
-                    ForEach-Object { [pscustomobject]@{ Impact = $_.Allvarlighet; Rekommendation = $_.Rekommendation; Resurs = ($_.Resurs -split '/')[-1] } })
-                [void]$body.Append('<h3>Defender-rekommendationer som inte uppfylls</h3>' + (ConvertTo-HtmlTable $recView @(@{Name='Impact';Label='Allvarlighet'}, @{Name='Rekommendation';Label='Rekommendation'}, @{Name='Resurs';Label='Resurs'}) 20))
-            }
-            if ($null -ne $costs -and @($costs).Count) {
-                [void]$body.Append('<h3>Kostnad per månad</h3>' + (ConvertTo-HtmlTable ($costs | Sort-Object Manad) @(@{Name='Prenumeration';Label='Prenumeration'}, @{Name='Manad';Label='Månad'}, @{Name='Kostnad';Label='Kostnad'}, @{Name='Valuta';Label='Valuta'}) 36))
-            }
-            [void]$body.Append('<p class="muted">Hämtat automatiskt via Azure. Fullständiga CSV-filer finns i mappen portal\. Azure Advisor-rekommendationer finns under azqr ovan.</p>')
-        }
-        $shots = @(Get-ChildItem $Dirs.portal -File -Filter '*.png' -ErrorAction SilentlyContinue).Count
-        [void]$body.Append("<p class=`"muted`">Skärmdumpar från portalen (valfritt): $(if ($shots) { "&#10003; $shots fil(er) i portal\" } else { 'inga' }).</p>")
-    }
-
-    # --- Begränsningar och fakta om körningen -------------------------------------
-    Invoke-Section 'Begränsningar' {
-        [void]$body.Append('<h2>Begränsningar och avgränsningar</h2>')
-        $lim = [System.Collections.Generic.List[string]]::new()
-        $lim.Add('Rapporten sammanfattar verktygens resultat och ersätter inte en granskning. Den visar läget vid körningstillfället.')
-        foreach ($k in $Status.Keys) {
-            $s = $Status[$k]
-            if ($s.State -eq 'Hoppad över') { $lim.Add("$k kördes inte (hoppades över).") }
-            elseif ($s.State -eq 'Fel') { $lim.Add("$k misslyckades och saknas därför i rapporten: $($s.Note)") }
-            elseif ($s.State -eq 'Delvis') { $lim.Add("$k lyckades bara delvis: $($s.Note)") }
-        }
-        $lim.Add('Governance Visualizer körs som vanlig användare, så roller som bara är tillgängliga via PIM men inte aktiverade ingår inte (kräver servicekonto). Klassiska prenumerationsadministratörer (ett pensionerat API) och kontrollen av Azure Landing Zones-policyversioner ingår inte.')
-        $lim.Add('Defender-rekommendationer hämtas från Azures API, som kan returnera en ofullständig lista. Använd Secure Score per kontroll som referens.')
-        $lim.Add('Kostnad avser de senaste 12 månaderna per prenumeration. Prognos och kostnad per tagg ingår inte.')
-        if ($HidePersonalData) { $lim.Add('Användardata är dolda i Governance Visualizers rapport (-HidePersonalData). Övriga rapporter, bland annat Maesters, kan innehålla namn.') }
-        else { $lim.Add('Rapporterna kan innehålla namn och e-postadresser (rolltilldelningar, Maester). Hantera dem som konfidentiella.') }
-        [void]$body.Append('<ul>' + (($lim | ForEach-Object { "<li>$(Esc $_)</li>" }) -join '') + '</ul>')
-
-        $meta = @(
-            [pscustomobject]@{ Falt = 'Rapportkit'; Varde = "v$KitVersion" },
-            [pscustomobject]@{ Falt = 'Körd'; Varde = $script:RunStart.ToString('yyyy-MM-dd HH:mm') },
-            [pscustomobject]@{ Falt = 'Tenant'; Varde = $TenantId },
-            [pscustomobject]@{ Falt = 'Verktygsversioner'; Varde = $(if ($LatestTools) { 'senaste (-LatestTools), inte testade med detta kit' } else { "testade: Governance Visualizer $GvVersion, azqr $($Pins.Azqr), Maester $($Pins.Maester), Pester $($Pins.Pester), Az.Accounts $($Pins.AzAccounts)" }) },
-            [pscustomobject]@{ Falt = 'Installerat'; Varde = ("Maester {0}, Az.Accounts {1}" -f (Get-ModuleVersionText 'Maester'), (Get-ModuleVersionText 'Az.Accounts')) },
-            [pscustomobject]@{ Falt = 'Dator'; Varde = ("PowerShell {0}, {1}" -f $PSVersionTable.PSVersion, [Environment]::OSVersion.VersionString) }
-        )
-        [void]$body.Append('<h3>Om körningen</h3>' + (ConvertTo-HtmlTable $meta @(@{Name='Falt';Label='Fält'}, @{Name='Varde';Label='Värde'}) 20))
-        [void]$body.Append('<p class="muted">Scriptet skriver inget i Azure-resurser eller Entra-konfigurationen. Det installerar verktyg lokalt, skapar inloggningssessioner (som syns i tenantens loggar), och för Maester krävs att en administratör godkänner läsbehörigheter för Microsoft Graph Command Line Tools.</p>')
-    }
-
-    # --- Status och varningar överst i rapporten ----------------------------
-    $top = [System.Text.StringBuilder]::new()
-    if ($Status.Count) {
-        $rows = $Status.GetEnumerator() | ForEach-Object { [pscustomobject]@{ Steg = $_.Key; Status = $_.Value.State; Notering = $_.Value.Note } }
-        [void]$top.Append('<h2>Körningsstatus</h2>' + (ConvertTo-HtmlTable $rows @(@{Name='Steg';Label='Steg'}, @{Name='Status';Label='Status'}, @{Name='Notering';Label='Notering'})))
-    }
-    if ($Warnings.Count) {
-        [void]$top.Append('<h2>Varningar</h2><ul>' + (($Warnings | ForEach-Object { "<li>$(Esc $_)</li>" }) -join '') + '</ul>')
-    }
-
-    # --- Utseende (ljust/mörkt läge följer webbläsaren) ---------------------
-    $css = @'
-:root{--bg:#fff;--fg:#1d2733;--mut:#667;--card:#f4f6f9;--bd:#dde2e8;--hi:#c0392b;--me:#d68910;--lo:#2e86c1;--ok:#1e8449}
-@media(prefers-color-scheme:dark){:root{--bg:#14181d;--fg:#e6e9ed;--mut:#9aa4af;--card:#1c222a;--bd:#2d3540}}
-body{font:15px/1.5 system-ui,Segoe UI,sans-serif;background:var(--bg);color:var(--fg);max-width:1000px;margin:0 auto;padding:24px 16px}
-h1{margin:0 0 4px}h2{margin-top:36px;border-bottom:1px solid var(--bd);padding-bottom:6px}h3{margin-top:22px}
-.muted{color:var(--mut)}a{color:var(--lo)}
-.tiles{display:flex;flex-wrap:wrap;gap:12px;margin:12px 0}
-.tile{background:var(--card);border:1px solid var(--bd);border-radius:8px;padding:12px 18px;min-width:120px;border-top:3px solid var(--bd)}
-.tile .v{font-size:26px;font-weight:700}.tile .l{color:var(--mut);font-size:13px}
-.tile.high{border-top-color:var(--hi)}.tile.medium{border-top-color:var(--me)}.tile.low{border-top-color:var(--lo)}.tile.ok{border-top-color:var(--ok)}
-table{border-collapse:collapse;width:100%;font-size:14px}th,td{text-align:left;padding:6px 10px;border-bottom:1px solid var(--bd);vertical-align:top}th{color:var(--mut);font-weight:600}
-.pill{padding:1px 8px;border-radius:10px;font-size:12px;font-weight:600;color:#fff;background:var(--mut)}
-.pill.high,.pill.failed,.pill.fel{background:var(--hi)}.pill.medium,.pill.delvis{background:var(--me)}.pill.low{background:var(--lo)}.pill.passed,.pill.ok{background:var(--ok)}
-@media(max-width:600px){table{display:block;overflow-x:auto}}
-'@
-    $html = @"
-<!doctype html><html lang="sv"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
-<title>Rapportkit $Period</title><style>$css</style></head><body>
-<h1>Rapportkit $Period</h1>
-<p class="muted">Tenant $TenantId &middot; skapad $(Get-Date -Format 'yyyy-MM-dd HH:mm') &middot; Rapportkit v$KitVersion &middot; konfidentiell information</p>
-$($top.ToString())
-$($body.ToString())
-</body></html>
-"@
-    $reportPath = Join-Path $RunDir 'rapport.html'
-    Set-Content -Path $reportPath -Value $html -Encoding utf8
+    Write-Step 10 'Bygger rapporten' 'Läser verktygens resultat och skriver en rapport i flera sidor med gemensam stil. Utseendet byts med -Brand eller -BrandPath (se branding\README.md).'
+    # Rapportgeneratorn ligger i lib\Report.ps1: den läser resultaten och bygger sidorna med det valda temat.
+    $reportLib = Join-Path $ScriptRoot 'lib\Report.ps1'
+    if (-not (Test-Path -LiteralPath $reportLib)) { Fail 'lib\Report.ps1 saknas bredvid scriptet, så rapporten kan inte byggas.' 'Använd hela kitet (zip från en release), inte bara Run-Rapportkit.ps1.' }
+    . $reportLib
+    $reportPath = Write-ReportSite
     Write-Ok "Rapport: $reportPath"
-
     # =======================================================================
     # Avslut: körningssammanfattning, zip för leverans, sammanfattningsruta, utloggning och städning.
     # =======================================================================
