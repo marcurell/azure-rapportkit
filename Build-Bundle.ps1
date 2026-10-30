@@ -60,7 +60,8 @@ Get-File "https://github.com/Azure/Azure-Governance-Visualizer/archive/refs/tags
 Assert-Zip "$tools\AzGovViz.zip" '*pwsh/AzGovVizParallel.ps1'
 
 Write-Host 'PowerShell-moduler' -ForegroundColor Cyan
-$modules = @(@{ N = 'Az.Accounts' }, @{ N = 'AzAPICall'; V = '1.4.1' }, @{ N = 'Pester' }, @{ N = 'Maester' })
+# Pester: Maester kräver 5.5+ och är testad mot 5.x, så version 6 hålls utanför.
+$modules = @(@{ N = 'Az.Accounts' }, @{ N = 'AzAPICall'; V = '1.4.1' }, @{ N = 'Pester'; Min = '5.5.0'; Max = '6.0.0' }, @{ N = 'Maester' })
 foreach ($m in $modules) {
     $dest = Join-Path $tools "modules\$($m.N)"
     if (Test-Path $dest) { Remove-Item $dest -Recurse -Force }
@@ -68,11 +69,13 @@ foreach ($m in $modules) {
     if (Get-Command Save-PSResource -ErrorAction SilentlyContinue) {
         $p = @{ Name = $m.N; Path = "$tools\modules"; TrustRepository = $true; Quiet = $true }
         if ($m.V) { $p.Version = $m.V }
+        elseif ($m.Min) { $p.Version = "[$($m.Min),$($m.Max))" }
         Save-PSResource @p
     }
     else {
         $p = @{ Name = $m.N; Path = "$tools\modules"; Force = $true }
         if ($m.V) { $p.RequiredVersion = $m.V }
+        if ($m.Min) { $p.MinimumVersion = $m.Min; $p.MaximumVersion = '5.99.99' }
         Save-Module @p
     }
     if (-not (Test-Path $dest)) { throw "Modulen $($m.N) hämtades inte till $dest" }

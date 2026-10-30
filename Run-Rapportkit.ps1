@@ -213,8 +213,12 @@ function Install-WithWinget([string]$Name, [string]$Id, [string]$Command, [strin
 
 # Hämtar en PowerShell-modul till vår egen modulmapp ($ModDir) och kontrollerar att den går att hitta.
 # Egen mapp används för att undvika problem när Dokument är omdirigerat till OneDrive.
-function Install-PsModule([string]$Name, [string]$Version) {
-    if (Get-Module -ListAvailable -Name $Name) { Write-Ok "Modul $Name finns redan"; return }
+# $Version = exakt version. $MinVersion/$MaxVersion = tillåtet intervall (max räknas som "lägre än" för PSResourceGet).
+# Versionen kontrolleras: Windows har t.ex. en inbyggd Pester 3.4 som inte duger åt Maester (kräver 5.5+).
+function Install-PsModule([string]$Name, [string]$Version, [string]$MinVersion, [string]$MaxVersion) {
+    $have = @(Get-Module -ListAvailable -Name $Name)
+    if ($MinVersion) { $have = @($have | Where-Object { $_.Version -ge [version]$MinVersion }) }
+    if ($have.Count) { Write-Ok "Modul $Name finns redan (version $($have[0].Version))"; return }
     if (Test-Path "$ToolsDir\modules\$Name") {            # offline-bundle
         Write-Action "Kopierar modul $Name från tools\modules"
         Copy-Item "$ToolsDir\modules\$Name" $ModDir -Recurse -Force
@@ -225,19 +229,24 @@ function Install-PsModule([string]$Name, [string]$Version) {
             if (Get-Command Save-PSResource -ErrorAction SilentlyContinue) {
                 $p = @{ Name = $Name; Path = $ModDir; TrustRepository = $true; Quiet = $true }
                 if ($Version) { $p.Version = $Version }
+                elseif ($MinVersion) { $p.Version = if ($MaxVersion) { "[$MinVersion,$MaxVersion)" } else { "[$MinVersion,)" } }
                 Save-PSResource @p
             }
             else {
                 Install-PackageProvider NuGet -Scope CurrentUser -Force | Out-Null
                 $p = @{ Name = $Name; Path = $ModDir; Force = $true }
                 if ($Version) { $p.RequiredVersion = $Version }
+                if ($MinVersion) { $p.MinimumVersion = $MinVersion }
+                if ($MaxVersion) { $p.MaximumVersion = $MaxVersion }
                 Save-Module @p
             }
         }
         catch { Fail "Kunde inte hämta modulen $Name från PowerShell Gallery: $($_.Exception.Message)" 'Kontrollera internetanslutningen (www.powershellgallery.com) och kör om scriptet.' }
     }
     else { Fail "Modulen $Name finns inte i tools\modules och -Offline är satt." 'Bygg om bundlen med Build-Bundle.ps1 eller kör utan -Offline.' }
-    if (-not (Get-Module -ListAvailable -Name $Name)) { Fail "Modulen $Name hämtades men gick inte att hitta i $ModDir." 'Radera mappen och kör om scriptet.' }
+    $have = @(Get-Module -ListAvailable -Name $Name)
+    if ($MinVersion) { $have = @($have | Where-Object { $_.Version -ge [version]$MinVersion }) }
+    if (-not $have.Count) { Fail "Modulen $Name hämtades men gick inte att hitta i $ModDir." 'Radera mappen och kör om scriptet.' }
     Write-Ok "Modul $Name klar"
 }
 
@@ -437,7 +446,8 @@ try {
         if (-not $SkipMaester) {
             try {
                 if ($NoInstall -and -not (Get-Module -ListAvailable -Name Maester)) { Fail 'Maester saknas (-NoInstall är satt).' 'Kör om utan -NoInstall.' }
-                Install-PsModule 'Pester'
+                # Maester kräver Pester 5.5 eller nyare. Pester 6 hålls utanför eftersom Maester är testad mot 5.x.
+                Install-PsModule 'Pester' -MinVersion '5.5.0' -MaxVersion '6.0.0'
                 Install-PsModule 'Maester'
             }
             catch { Set-Status 'Maester' 'Fel' (Get-ErrorText $_); Write-Warn2 (Get-ErrorText $_); $SkipMaester = $true }
