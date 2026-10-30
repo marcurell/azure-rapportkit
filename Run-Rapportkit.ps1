@@ -336,12 +336,18 @@ try {
     Write-Step 1 'Förberedelser' 'Tenant-ID, mappar, loggfil och förkontroller. Tar några sekunder.'
     Update-SessionPath
 
-    # Tenant-ID: använd parametern, annars föreslå det Azure CLI redan är inloggat mot.
+    # Tenant-ID: använd parametern, annars föreslå det Azure CLI redan är inloggat mot. Förslaget kommer
+    # alltså från den inloggning som redan finns på datorn (az account show); inget tenant-ID är sparat i scriptet.
     if (-not $TenantId) {
         $guess = $null
-        if (Test-Cmd az) { try { $guess = az account show --query tenantId -o tsv 2>$null } catch { } }
+        if (Test-Cmd az) {
+            try {
+                $guess = az account show --query tenantId -o tsv 2>$null
+                $who = az account show --query user.name -o tsv 2>$null
+            } catch { }
+        }
         $prompt = 'Ange tenant-ID (Entra ID > Overview > Tenant ID)'
-        if ($guess) { $prompt += " [Enter = $guess]" }
+        if ($guess) { $prompt += " [Enter = $guess, hämtat från Azure CLI-inloggningen som $who]" }
         try { $TenantId = Read-Host $prompt } catch { $TenantId = $null }
         if (-not $TenantId) { $TenantId = $guess }
     }
@@ -613,7 +619,7 @@ try {
             try { $code = (Invoke-AzRestMethod -Method GET -Path "/providers/Microsoft.Management/managementGroups/${mgCheck}?api-version=2021-04-01").StatusCode } catch { }
             if ($code -eq 200) { Write-Ok "Management group '$mgCheck' är läsbar" }
             else {
-                Write-Warn2 "Kontot kan inte läsa management group '$mgCheck' (svar: $code). Governance Visualizer kommer sannolikt att misslyckas. Reader behövs på tenant root (se README), eller ange en annan grupp med -ManagementGroupId."
+                Write-Warn2 "Kontot kan inte läsa management group '$mgCheck' (svar: $code). Governance Visualizer kommer sannolikt att misslyckas. Reader behövs på tenant root (se README). Har du höjt åtkomsten (User Access Administrator) men inte tilldelat Reader ännu: gör det, eller ange en annan grupp med -ManagementGroupId."
                 if (-not (Confirm-Continue 'Köra Governance Visualizer ändå?')) {
                     $SkipGovViz = $true
                     Set-Status 'Governance Visualizer' 'Hoppad över' "Valdes bort efter behörighetskontrollen: Reader saknas på management group '$mgCheck'."
@@ -659,12 +665,40 @@ try {
                 Write-Ok 'Governance Visualizer klar'
             }
             catch {
-                # Plocka ut raderna i verktygets utskrift som förklarar felet (t.ex. "permissions ... check FAILED").
-                $reason = @($gvLines | ForEach-Object { "$_".Trim() } | Where-Object { $_ -match 'FAILED|Permission check|not authorized|AuthorizationFailed' } | Select-Object -Last 2) -join ' | '
                 $msg = $_.Exception.Message
+                # Spara verktygets hela utskrift och plocka ut raderna som förklarar felet. Mönstren är
+                # skiftlägeskänsliga (-cmatch) så att t.ex. parametern "PSRuleFailedOnly" inte räknas som ett fel.
+                $consoleFile = Join-Path $Dirs.azgovviz 'azgovviz-console.txt'
+                try { $gvLines | Set-Content $consoleFile -Encoding utf8 } catch { }
+                $reason = @($gvLines | ForEach-Object { "$_".Trim() } |
+                    Where-Object { $_ -cmatch '(^|[\s\[])(ERROR|Error)\b|check FAILED|AuthorizationFailed|not authorized|Forbidden|Exception' } |
+                    Select-Object -Last 3) -join ' | '
+                # Verktyget skriver "Permission check results" när kontot saknar Reader på management group, följt
+                # av de roller kontot faktiskt har. Läs ut dem så att felet blir konkret.
+                $permFail = $false
+                for ($i = 0; $i -lt $gvLines.Count; $i++) {
+                    if ($gvLines[$i] -clike '*Permission check results*') {
+                        $permFail = $true
+                        $last = [Math]::Min($i + 10, $gvLines.Count - 1)
+                        $roles = @($gvLines[$i..$last] | ForEach-Object { if ("$_" -match '^\s*-\s+(.+?)\s+\(') { $Matches[1] } })
+                        $reason = 'Kontot saknar rollen Reader på management group' + $(if ($roles) { " (har: $($roles -join ', '))" } else { '' })
+                    }
+                }
                 if ($reason) { $msg = "$reason ($msg)" }
-                Write-Warn2 $msg
-                Set-Status 'Governance Visualizer' 'Fel' ($msg + ' Vanlig orsak: Reader saknas på Tenant Root Group (se README) - ange då en annan grupp med -ManagementGroupId.')
+                # Behörighetsfel: ge den vanliga förklaringen. Annars: hänvisa till utskriften.
+                $hint = if ($permFail -or $msg -cmatch 'check FAILED|AuthorizationFailed|not authorized|Forbidden') {
+                            ' Åtgärd: tilldela Reader på tenant root (har du höjt åtkomsten men saknar Reader: kör kommandona under "Ge dig själv läsrätt" i README), eller ange en annan grupp med -ManagementGroupId.' }
+                        else { " Hela utskriften finns i $consoleFile." }
+                # Kan rapporten ha hunnit skapas före felet? Då är resultatet delvis användbart.
+                $partial = Get-ChildItem $Dirs.azgovviz -Filter 'AzGovViz*.html' -Recurse -ErrorAction SilentlyContinue | Where-Object Length -gt 10KB | Select-Object -First 1
+                if ($partial) {
+                    Write-Warn2 "Governance Visualizer rapporterade fel men skapade en rapport: $msg"
+                    Set-Status 'Governance Visualizer' 'Delvis' ("Rapporten skapades men verktyget avslutades med fel, så den kan sakna delar. $msg$hint")
+                }
+                else {
+                    Write-Warn2 $msg
+                    Set-Status 'Governance Visualizer' 'Fel' ($msg + $hint)
+                }
             }
         }
 
@@ -853,6 +887,36 @@ try {
         [void]$body.Append((Tile 'Godkända' $m.PassedCount 'ok') + (Tile 'Underkända' $m.FailedCount 'high') + (Tile 'Överhoppade' $m.SkippedCount) + '</div>')
         $failed = @($m.Tests | Where-Object Result -eq 'Failed' | Select-Object -First 25 | ForEach-Object { [pscustomobject]@{ Result = 'Failed'; Test = $_.Name } })
         [void]$body.Append('<h3>Underkända tester</h3>' + (ConvertTo-HtmlTable $failed @(@{Name='Result';Label='Resultat'}, @{Name='Test';Label='Test'}) 25))
+
+        # Tester som hoppades över: ange orsaken (oftast licens), så att läsaren vet vad som INTE kontrollerats.
+        $skipped = @($m.Tests | Where-Object Result -eq 'Skipped')
+        if ($skipped.Count) {
+            $labels = @{
+                NotLicensedEntraIDP1 = 'Licens saknas: Entra ID P1'; NotLicensedEntraIDP2 = 'Licens saknas: Entra ID P2'
+                NotLicensedEntraIDGovernance = 'Licens saknas: Entra ID Governance'; NotLicensedEntraIDP2OrGovernance = 'Licens saknas: Entra ID P2 eller Governance'
+                NotLicensedEntraWorkloadID = 'Licens saknas: Entra Workload ID'; NotLicensedIntune = 'Licens saknas: Intune'
+                NotLicensedEop = 'Licens saknas: Exchange Online Protection'; NotLicensedMdo = 'Licens saknas: Defender for Office 365'
+                NotLicensedMdoP1 = 'Licens saknas: Defender for Office 365 P1'; NotLicensedMdoP2 = 'Licens saknas: Defender for Office 365 P2'
+                NotLicensedExoDlp = 'Licens saknas: Exchange DLP'; NotLicensedAdvAudit = 'Licens saknas: Advanced Auditing'
+                NotLicensedDefenderXDR = 'Licens saknas: Defender XDR'; NotLicensedCustomerLockbox = 'Licens saknas: Customer Lockbox'
+                Error = 'Testet kunde inte köras (fel)'
+            }
+            $skipRows = $skipped | Group-Object {
+                $d = $_.ResultDetail
+                $k = if ($d -and $d.TestSkipped) { [string]$d.TestSkipped } else { 'Okänd orsak' }
+                # Fri text från testet ("Custom") används som orsak; markdown-länkar [text](url) kortas till text.
+                if ($k -eq 'Custom' -and $d.SkippedReason) { ([string]$d.SkippedReason) -replace '\[([^\]]+)\]\([^)]+\)', '$1' } else { $k }
+            } | Sort-Object Count -Descending | ForEach-Object {
+                [pscustomobject]@{
+                    Orsak  = $(if ($labels.ContainsKey($_.Name)) { $labels[$_.Name] } else { $_.Name })
+                    Antal  = $_.Count
+                    Exempel = ($_.Group | Select-Object -First 2 -ExpandProperty Name) -join '; '
+                }
+            }
+            $licSkipped = @($skipped | Where-Object { $_.ResultDetail.TestSkipped -like 'NotLicensed*' }).Count
+            [void]$body.Append("<h3>Tester som inte kunde köras ($($skipped.Count))</h3><p class=`"muted`">Dessa kontroller ingår <strong>inte</strong> i resultatet. $licSkipped av dem beror på att tenanten saknar en licens (t.ex. Entra ID P1/P2) och resten på att funktionen inte är aktiverad eller inte gick att läsa. Det säger alltså inget om huruvida inställningen är bra eller dålig.</p>" +
+                (ConvertTo-HtmlTable $skipRows @(@{Name='Orsak';Label='Orsak'}, @{Name='Antal';Label='Antal'}, @{Name='Exempel';Label='Exempel på test'}) 20))
+        }
         $mh = Get-ChildItem $Dirs.maester -Filter '*.html' -Recurse | Select-Object -First 1
         if ($mh) { [void]$body.Append("<p>Fullständig rapport: <a href=`"$(RelLink $mh.FullName)`">$(Esc $mh.Name)</a></p>") }
     }
@@ -896,7 +960,7 @@ h1{margin:0 0 4px}h2{margin-top:36px;border-bottom:1px solid var(--bd);padding-b
 .tile.high{border-top-color:var(--hi)}.tile.medium{border-top-color:var(--me)}.tile.low{border-top-color:var(--lo)}.tile.ok{border-top-color:var(--ok)}
 table{border-collapse:collapse;width:100%;font-size:14px}th,td{text-align:left;padding:6px 10px;border-bottom:1px solid var(--bd);vertical-align:top}th{color:var(--mut);font-weight:600}
 .pill{padding:1px 8px;border-radius:10px;font-size:12px;font-weight:600;color:#fff;background:var(--mut)}
-.pill.high,.pill.failed,.pill.fel{background:var(--hi)}.pill.medium{background:var(--me)}.pill.low{background:var(--lo)}.pill.passed,.pill.ok{background:var(--ok)}
+.pill.high,.pill.failed,.pill.fel{background:var(--hi)}.pill.medium,.pill.delvis{background:var(--me)}.pill.low{background:var(--lo)}.pill.passed,.pill.ok{background:var(--ok)}
 @media(max-width:600px){table{display:block;overflow-x:auto}}
 '@
     $html = @"
@@ -920,9 +984,10 @@ $($body.ToString())
     $anyFail = $false
     foreach ($k in $Status.Keys) {
         $s = $Status[$k]
-        $color = switch ($s.State) { 'OK' { 'Green' } 'Fel' { 'Red' } default { 'DarkGray' } }
+        $color = switch ($s.State) { 'OK' { 'Green' } 'Fel' { 'Red' } 'Delvis' { 'Yellow' } default { 'DarkGray' } }
         Write-Host ("  {0,-24} {1}" -f $k, $s.State) -ForegroundColor $color
         if ($s.State -eq 'Fel') { $anyFail = $true; Write-Host "      $($s.Note)" -ForegroundColor Yellow }
+        elseif ($s.State -eq 'Delvis') { Write-Host "      $($s.Note)" -ForegroundColor Yellow }
     }
     if ($anyFail) {
         $ExitCode = 2
