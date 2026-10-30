@@ -9,18 +9,23 @@
     Steg 1  Förberedelser    Tenant-ID, resultatmappar, loggfil
     Steg 2  Förkontroll      Kontrollerar förutsättningar (verktyg, nätverk, disk) innan något hämtas, och
                              låter dig välja om du vill fortsätta även om något saknas
-    Steg 3  Beroenden        Laddar ner och installerar det som saknas på den här datorn:
-                               - PowerShell 7           (winget)
-                               - Azure CLI              (winget)
+    Steg 3  Azure CLI, inloggning och rollkontroll
+                             Installerar Azure CLI, loggar in och kontrollerar att kontot har rätt roller
+                             (Reader, Security Reader, Cost Management Reader, Global Reader). Saknas roller
+                             visas hur de läggs till, och du väljer om du vill avsluta eller fortsätta.
+    Steg 4  Beroenden        Laddar ner och installerar det som saknas på den här datorn:
+                               - PowerShell 7           (winget, redan i bootstrap)
                                - azqr                   (winget, annars direktnedladdning från GitHub)
                                - Azure Governance Visualizer (zip från GitHub, fast version)
-                               - PowerShell-moduler Az.Accounts, AzAPICall, Pester, Maester (PSGallery)
+                               - PowerShell-moduler Az.Accounts, AzAPICall, Pester 5.5+, Maester (PSGallery)
                              Varje nedladdning verifieras (storlek, zip-integritet, förväntade filer).
-    Steg 4  Inloggning       Azure CLI, Az PowerShell och (valfritt) Microsoft Graph, samt kontroll av behörighet
-    Steg 5  Governance Visualizer   Management groups, policies, rolltilldelningar
-    Steg 6  azqr                    Rekommendationer per resurs + Advisor + Defender
-    Steg 7  Maester                 Tester av Entra ID (valfritt)
-    Steg 8  HTML-rapport     Sammanfattning i <resultatmapp>\rapport.html. Resultatfilerna kontrolleras
+    Steg 5  Inloggning       Az PowerShell och (valfritt) Microsoft Graph, samt kontroll av management group
+    Steg 6  Governance Visualizer   Management groups, policies, rolltilldelningar
+    Steg 7  azqr                    Rekommendationer per resurs + Advisor + Defender
+    Steg 8  Maester                 Tester av Entra ID (valfritt)
+    Steg 9  Defender och kostnad    Defender-planer, Secure Score, Defender-rekommendationer och kostnad
+                                    (12 mån) hämtas automatiskt och sparas som CSV i portal\
+    Steg 10 HTML-rapport     Sammanfattning i <resultatmapp>\rapport.html. Resultatfilerna kontrolleras
                              innan de läses; avvikelser visas som varningar i rapporten.
 
   Allt är read-only: inget i Azure eller Entra ändras. Det som installeras hamnar på den här
@@ -53,6 +58,8 @@
   Ladda inte ner något från internet; använd bara mappen tools\ (se Build-Bundle.ps1).
 .PARAMETER ReportOnly
   Kör inga verktyg, bygg bara om HTML-rapporten från befintliga resultat.
+.PARAMETER SkipPortal
+  Hoppa över hämtningen av Defender- och kostnadsdata (steg 9).
 .PARAMETER Yes
   Svara ja på alla "fortsätta ändå?"-frågor (förkontroll och behörighetskontroll), t.ex. för automatiska körningar.
 
@@ -74,6 +81,7 @@ param(
     [switch]$NoInstall,
     [switch]$Offline,
     [switch]$ReportOnly,
+    [switch]$SkipPortal,
     [switch]$Yes
 )
 
@@ -90,7 +98,7 @@ foreach ($k in $PSBoundParameters.Keys) { $BoundParams[$k] = $PSBoundParameters[
 
 $ScriptRoot = Split-Path -Parent $PSCommandPath
 $ToolsDir = Join-Path $ScriptRoot 'tools'        # används bara för offline-bundle
-$TotalSteps = 8
+$TotalSteps = 10
 # Governance Visualizer hämtas som en fast version (den som testats). Ändras med flit, inte av misstag.
 $GvVersion = '6.7.2'
 $GvUrl = "https://github.com/Azure/Azure-Governance-Visualizer/archive/refs/tags/$GvVersion.zip"
@@ -183,6 +191,113 @@ function Confirm-Continue([string]$Question) {
     try { $a = Read-Host "  $Question (j/N)" }
     catch { Write-Warn2 'Frågan kan inte ställas (ingen inmatning). Fortsätter.'; return $true }
     return [bool](("$a").Trim([char]0xFEFF).Trim() -match '^[jJyY]')
+}
+
+# Tillåter de effektiva behörigheterna ($Perms = svar från Microsoft.Authorization/permissions) åtgärden?
+# Wildcards (*) i roller hanteras med -like; notActions drar bort.
+function Test-ActionAllowed($Perms, [string]$Action) {
+    foreach ($p in @($Perms)) {
+        $ok = $false
+        foreach ($a in @($p.actions)) { if ($Action -like $a) { $ok = $true; break } }
+        if (-not $ok) { continue }
+        $denied = $false
+        foreach ($n in @($p.notActions)) { if ($Action -like $n) { $denied = $true; break } }
+        if (-not $denied) { return $true }
+    }
+    return $false
+}
+
+# Anropar Azure Resource Manager via az rest (inget az-tillägg behövs). Försöker 3 gånger vid
+# hastighetsbegränsning (429). Kastar fel med Azures meddelande om anropet misslyckas.
+function Invoke-AzRest([string]$Method, [string]$Url, $Body) {
+    $azArgs = @('rest', '--method', $Method, '--url', $Url, '-o', 'json')
+    $tmp = $null
+    if ($Body) {
+        $tmp = Join-Path $env:TEMP ('azrest-' + [guid]::NewGuid().ToString('N') + '.json')
+        [IO.File]::WriteAllText($tmp, ($Body | ConvertTo-Json -Depth 8))
+        $azArgs += @('--body', "@$tmp")
+    }
+    try {
+        for ($i = 1; $i -le 5; $i++) {
+            $out = & az @azArgs 2>$null
+            $code = $LASTEXITCODE
+            # Vissa API:er (t.ex. Defender) ger exit-kod 1 trots fullständigt svar. Giltig JSON utan felfält accepteras.
+            $text = ($out | Out-String).Trim()
+            if ($text) {
+                try { $parsed = $text | ConvertFrom-Json; if ($code -eq 0 -or -not $parsed.error) { return $parsed } } catch { }
+            }
+            if ($code -eq 0) { return $null }
+            # Kör igen med stderr för att få felmeddelandet.
+            $txt = (& az @azArgs 2>&1 | Out-String).Trim()
+            if ($LASTEXITCODE -eq 0) { return ($txt | ConvertFrom-Json) }
+            # Hastighetsbegränsning (Cost Management är strikt): vänta allt längre och försök igen, upp till 5 gånger.
+            if ($txt -match 'TooManyRequests|Too Many Requests|429' -and $i -lt 5) { Write-Host "      (begränsat av Azure, väntar $(15 * $i) s och försöker igen)" -ForegroundColor DarkGray; Start-Sleep -Seconds (15 * $i); continue }
+            $short = ($txt -split "`n" | Where-Object { $_ -match 'ERROR|Error|error|message' } | Select-Object -First 1)
+            throw $(if ($short) { $short.Trim() } else { $txt })
+        }
+    }
+    finally { if ($tmp) { Remove-Item $tmp -Force -ErrorAction SilentlyContinue } }
+}
+
+# Kontrollerar det inloggade kontots roller (Azure på tenant root, Entra via Graph) mot det som valda verktyg behöver.
+# Ger en lista med State (OK/VARNING/SAKNAS/INFO), Kind (Azure/Entra), Role, Name och Detail.
+function Get-RoleChecks([string]$Tenant, [bool]$NeedGovViz, [bool]$NeedPortal, [bool]$NeedMaester) {
+    $res = [System.Collections.Generic.List[object]]::new()
+    $add = { param($s, $k, $role, $d) $res.Add([pscustomobject]@{ State = $s; Kind = $k; Role = $role; Name = $role; Detail = $d }) }
+
+    # Roller som är tilldelade på tenant root (inklusive via grupper) samt effektiva behörigheter där och på första subscription.
+    $names = @()
+    $meId = az ad signed-in-user show --query id -o tsv 2>$null
+    if ($meId) { $names = @(az role assignment list --scope '/' --assignee $meId --include-inherited --include-groups --query '[].roleDefinitionName' -o tsv 2>$null | Where-Object { $_ }) }
+    $rootPerms = $null; $subPerms = $null
+    try { $rootPerms = (az rest --method get --url "https://management.azure.com/providers/Microsoft.Management/managementGroups/$Tenant/providers/Microsoft.Authorization/permissions?api-version=2022-04-01" -o json 2>$null | ConvertFrom-Json).value } catch { }
+    $firstSub = az account list --query '[0].id' -o tsv 2>$null
+    if ($firstSub) { try { $subPerms = (az rest --method get --url "https://management.azure.com/subscriptions/$firstSub/providers/Microsoft.Authorization/permissions?api-version=2022-04-01" -o json 2>$null | ConvertFrom-Json).value } catch { } }
+    $have = if ($names.Count) { $names -join ', ' } else { 'inga på tenant root' }
+
+    # Reader: Governance Visualizer kontrollerar rollens namn, de andra verktygen räknar med effektiv läsrätt.
+    $effRoot = Test-ActionAllowed $rootPerms 'Microsoft.Management/managementGroups/read'
+    $effSub = Test-ActionAllowed $subPerms 'Microsoft.Resources/subscriptions/resources/read'
+    if ($names -contains 'Reader') { & $add 'OK' 'Azure' 'Reader' 'tilldelad på tenant root' }
+    elseif ($effRoot -and -not $NeedGovViz) { & $add 'OK' 'Azure' 'Reader' "läsrätt på tenant root via annan roll ($have)" }
+    elseif ($effRoot) { & $add 'SAKNAS' 'Azure' 'Reader' "rollen Reader är inte tilldelad (har: $have). Läsrätt finns via den rollen, men Governance Visualizer kräver just Reader." }
+    elseif ($effSub) { & $add 'VARNING' 'Azure' 'Reader' 'saknas på tenant root men finns på subscription: azqr och portaldata fungerar, Governance Visualizer (kräver tenant root) gör det inte' }
+    else { & $add 'SAKNAS' 'Azure' 'Reader' "saknas (har: $have)" }
+
+    if ($NeedPortal) {
+        foreach ($d in @(@{ Role = 'Security Reader'; Action = 'Microsoft.Security/assessments/read'; Why = 'Defender-data' }, @{ Role = 'Cost Management Reader'; Action = 'Microsoft.CostManagement/query/read'; Why = 'kostnadsdata' })) {
+            if ($names -contains $d.Role) { & $add 'OK' 'Azure' $d.Role 'tilldelad på tenant root' }
+            elseif (Test-ActionAllowed $rootPerms $d.Action) { & $add 'OK' 'Azure' $d.Role "behörighet för $($d.Why) finns via annan roll" }
+            elseif (Test-ActionAllowed $subPerms $d.Action) { & $add 'VARNING' 'Azure' $d.Role "saknas på tenant root men $($d.Why) går att hämta på subscription-nivå" }
+            else { & $add 'SAKNAS' 'Azure' $d.Role "saknas, så $($d.Why) kan inte hämtas" }
+        }
+    }
+
+    # Entra ID-roll för Maester (Global Reader eller Global Administrator), läst via Microsoft Graph.
+    if ($NeedMaester) {
+        $dirRoles = @(az rest --method get --url 'https://graph.microsoft.com/v1.0/me/transitiveMemberOf/microsoft.graph.directoryRole?$select=displayName' --query 'value[].displayName' -o tsv 2>$null | Where-Object { $_ })
+        if ($LASTEXITCODE -ne 0) { & $add 'INFO' 'Entra' 'Global Reader' 'kunde inte kontrolleras här (kontrolleras när Maester loggar in)' }
+        elseif ($dirRoles -contains 'Global Reader' -or $dirRoles -contains 'Global Administrator') { & $add 'OK' 'Entra' 'Global Reader' "Entra-roll finns ($($dirRoles -join ', '))" }
+        else { & $add 'SAKNAS' 'Entra' 'Global Reader' 'saknas i Entra ID (Global Reader eller Global Administrator behövs för Maester)' }
+    }
+    $res
+}
+
+# Ger instruktioner (en rad per element) för att lägga till de roller som saknas.
+function Get-RoleInstructions($Missing) {
+    $azure = @($Missing | Where-Object { $_.Kind -eq 'Azure' })
+    $entra = @($Missing | Where-Object { $_.Kind -eq 'Entra' })
+    $lines = [System.Collections.Generic.List[string]]::new()
+    if ($azure.Count) {
+        $lines.Add('Azure-roller (på tenant root, scope "/"):')
+        $lines.Add('1. Entra ID > Properties > "Access management for Azure resources" = Yes. Spara, logga ut och in igen.')
+        $lines.Add('2. Kör i PowerShell:')
+        $lines.Add('     $me = az ad signed-in-user show --query id -o tsv')
+        foreach ($r in $azure) { $lines.Add(('     az role assignment create --assignee-object-id $me --assignee-principal-type User --role "{0}" --scope "/"' -f $r.Role)) }
+        $lines.Add('3. Sätt "Access management for Azure resources" tillbaka till No. Rollerna kan ta någon minut att slå igenom.')
+    }
+    if ($entra.Count) { $lines.Add('Entra-roll: Entra ID > Roles and administrators > Global Reader > Add assignments > välj ditt konto.') }
+    $lines
 }
 
 # Är filen en hel zip som innehåller (minst) en post som matchar $MustContain?
@@ -378,7 +493,7 @@ try {
     # Logga allt som skrivs i fönstret till en fil (bra att skicka med vid felsökning).
     try { Start-Transcript -Path (Join-Path $RunDir 'rapportkit.log') -Append | Out-Null; $TranscriptStarted = $true } catch { Write-Warn2 'Kunde inte starta loggfil (fortsätter ändå).' }
 
-    if ($ReportOnly) { Write-Host "`n  -ReportOnly: hoppar över steg 2-7 och bygger bara rapporten." -ForegroundColor DarkCyan }
+    if ($ReportOnly) { Write-Host "`n  -ReportOnly: hoppar över steg 2-9 och bygger bara rapporten." -ForegroundColor DarkCyan }
     else {
 
         # ===================================================================
@@ -392,8 +507,9 @@ try {
         # Program och moduler: finns de redan, eller måste de hämtas?
         $need = [System.Collections.Generic.List[string]]::new()
         $wingetNeeded = $false
+        # Azure CLI behövs alltid: inloggning, rollkontroll, azqr och Defender/kostnadsdata.
+        if (-not (Test-Cmd az)) { $need.Add('Azure CLI (winget)'); $wingetNeeded = $true }
         if (-not $SkipAzqr) {
-            if (-not (Test-Cmd az)) { $need.Add('Azure CLI (winget)'); $wingetNeeded = $true }
             if (-not (Test-Cmd azqr) -and -not (Test-Path (Join-Path $env:LOCALAPPDATA 'azqr\azqr.exe'))) { $need.Add('azqr (winget/GitHub)'); $wingetNeeded = $true }
         }
         if (-not $SkipGovViz) {
@@ -442,7 +558,7 @@ try {
         $isAdmin = ([Security.Principal.WindowsPrincipal][Security.Principal.WindowsIdentity]::GetCurrent()).IsInRole([Security.Principal.WindowsBuiltInRole]::Administrator)
         Add-Check 'INFO' 'Windows-behörighet' $(if ($isAdmin) { 'förhöjd (administratör). Krävs inte.' } else { 'vanlig användare. Räcker; Windows kan be om godkännande (UAC) vid installation av PowerShell 7/Azure CLI.' })
         if ([Console]::IsInputRedirected) { Add-Check 'VARNING' 'Interaktivt fönster' 'inmatning är omdirigerad: frågor går inte att besvara och inloggning kan misslyckas' }
-        Add-Check 'INFO' 'Behörigheter i Azure' 'kontrolleras efter inloggningen (steg 4): Reader på management group för Governance Visualizer, Global Admin-godkännande för Maester'
+        Add-Check 'INFO' 'Behörigheter i Azure' 'kontrolleras direkt efter inloggningen i steg 3 (Reader, Security Reader, Cost Management Reader, Global Reader); saknas något får du välja att avsluta'
 
         foreach ($c in $checks) {
             $color = switch ($c.State) { 'OK' { 'Green' } 'INFO' { 'Cyan' } 'VARNING' { 'Yellow' } default { 'Red' } }
@@ -458,21 +574,74 @@ try {
         else { Write-Ok 'Förkontrollen gav inga anmärkningar' }
 
         # ===================================================================
-        # STEG 3: Beroenden. Varje verktyg hämtas för sig; misslyckas ett stängs just det
+        # STEG 3: Azure CLI, inloggning och rollkontroll. Görs före all övrig hämtning så att du får veta
+        # direkt om roller saknas.
+        # ===================================================================
+        Write-Step 3 'Azure CLI, inloggning och rollkontroll' 'Installerar Azure CLI om det saknas, loggar in (ett webbläsarfönster öppnas) och kontrollerar att kontot har rätt roller, innan resten hämtas. Hinner du inte: tryck Ctrl+C och kör om scriptet.'
+        $azReady = $false
+        $subCount = 0
+        try {
+            if (Test-Cmd az) { Write-Ok 'Azure CLI finns redan' }
+            elseif ($NoInstall) { Fail 'Azure CLI saknas (-NoInstall är satt).' 'Installera Azure CLI (https://aka.ms/installazurecliwindows) och kör om.' }
+            else { Install-WithWinget 'Azure CLI' 'Microsoft.AzureCLI' 'az' 'https://aka.ms/installazurecliwindows' }
+
+            $cur = az account show --query tenantId -o tsv 2>$null
+            if ($cur -eq $TenantId) { Write-Ok 'Azure CLI är redan inloggad mot rätt tenant' }
+            else {
+                Write-Todo 'Logga in i webbläsarfönstret som öppnas (Azure CLI)...'
+                if ($DeviceLogin) { az login --tenant $TenantId --use-device-code --allow-no-subscriptions --only-show-errors | Out-Null }
+                else              { az login --tenant $TenantId --allow-no-subscriptions --only-show-errors | Out-Null }
+            }
+            if ((az account show --query tenantId -o tsv 2>$null) -ne $TenantId) {
+                Fail 'Azure CLI-inloggningen mot rätt tenant slutfördes inte.' 'Kör om scriptet och logga in när webbläsarfönstret öppnas (eller använd -DeviceLogin).'
+            }
+            # (Räknas i PowerShell: parenteser i --query förstörs av az.cmd:s citering.)
+            $subCount = @(az account list --query '[].id' -o tsv 2>$null | Where-Object { $_ }).Count
+            Write-Ok "Azure CLI inloggad ($subCount subscription(s) synliga)"
+            $azReady = $true
+        }
+        catch {
+            $m = Get-ErrorText $_
+            Write-Warn2 $m
+            foreach ($tool in 'azqr', 'Defender och kostnad') { Set-Status $tool 'Fel' "Azure CLI-inloggning saknas: $m" }
+            $SkipAzqr = $true; $SkipPortal = $true
+        }
+        if ($azReady -and $subCount -lt 1) {
+            Write-Warn2 'Kontot ser ingen subscription i tenanten, så azqr och Defender/kostnad kan inte köras. Tilldela rollen Reader (se README).'
+            foreach ($tool in 'azqr', 'Defender och kostnad') { Set-Status $tool 'Fel' 'Kontot har inte åtkomst till någon subscription i tenanten. Tilldela rollen Reader (se README).' }
+            $SkipAzqr = $true; $SkipPortal = $true
+        }
+
+        # Rollkontroll: har kontot de roller som de valda verktygen behöver? Saknas något visas hur du lägger till dem,
+        # och du väljer om du vill avsluta (standard) eller fortsätta ändå.
+        if ($azReady) {
+            Write-Action 'Kontrollerar kontots roller'
+            $roleChecks = @(Get-RoleChecks -Tenant $TenantId -NeedGovViz (-not $SkipGovViz) -NeedPortal (-not $SkipPortal) -NeedMaester (-not $SkipMaester))
+            foreach ($c in $roleChecks) {
+                $color = switch ($c.State) { 'OK' { 'Green' } 'INFO' { 'Cyan' } 'VARNING' { 'Yellow' } default { 'Red' } }
+                Write-Host ("  [{0,-7}] {1}: {2}" -f $c.State, $c.Role, $c.Detail) -ForegroundColor $color
+            }
+            $missingRoles = @($roleChecks | Where-Object { $_.State -eq 'SAKNAS' })
+            if ($missingRoles.Count) {
+                Write-Host ''
+                Write-Host '  Så här lägger du till de roller som saknas (görs av en Global Administrator):' -ForegroundColor Yellow
+                foreach ($line in (Get-RoleInstructions $missingRoles)) { Write-Host "    $line" -ForegroundColor White }
+                Write-Host ''
+                if (-not (Confirm-Continue "$($missingRoles.Count) roll(er) saknas. Fortsätta ändå (delar av körningen kan misslyckas)?")) {
+                    Fail 'Avbrutet: roller som behövs saknas.' 'Lägg till rollerna enligt instruktionen ovan (logga ut och in efteråt) och kör om scriptet.'
+                }
+            }
+            else { Write-Ok 'Rollerna ser ut att stämma' }
+        }
+
+        # ===================================================================
+        # STEG 4: Beroenden. Varje verktyg hämtas för sig; misslyckas ett stängs just det
         # verktyget av (status "Fel") och de andra körs vidare.
         # ===================================================================
-        Write-Step 3 'Hämtar och installerar beroenden' 'Bara det som saknas på den här datorn. Första gången tar det 5-10 minuter.'
+        Write-Step 4 'Hämtar och installerar beroenden' 'Bara det som saknas på den här datorn. Första gången tar det 5-10 minuter.'
         if ($NoInstall) { Write-Warn2 '-NoInstall: hoppar över all hämtning och installation.' }
 
-        # Azure CLI (behövs bara av azqr: används för inloggning).
-        if (-not $SkipAzqr) {
-            try {
-                if (Test-Cmd az) { Write-Ok 'Azure CLI finns redan' }
-                elseif ($NoInstall) { Fail 'Azure CLI saknas (-NoInstall är satt).' 'Installera Azure CLI (https://aka.ms/installazurecliwindows) och kör om.' }
-                else { Install-WithWinget 'Azure CLI' 'Microsoft.AzureCLI' 'az' 'https://aka.ms/installazurecliwindows' }
-            }
-            catch { Set-Status 'azqr' 'Fel' (Get-ErrorText $_); Write-Warn2 (Get-ErrorText $_); $SkipAzqr = $true }
-        }
+        # (Azure CLI installerades redan i steg 3.)
 
         # azqr: först winget, annars hämtas senaste releasen direkt från GitHub (och zipen verifieras).
         if (-not $SkipAzqr) {
@@ -545,38 +714,19 @@ try {
         }
 
         # Finns det något kvar att köra? Annars är det ingen idé att fortsätta.
-        if ($SkipGovViz -and $SkipAzqr -and $SkipMaester) {
+        if ($SkipGovViz -and $SkipAzqr -and $SkipMaester -and $SkipPortal) {
             Fail 'Inget verktyg kunde förberedas, så det finns inget att köra.' 'Se felen ovan, åtgärda dem och kör om scriptet.'
         }
 
         # ===================================================================
-        # STEG 4: Inloggning. Misslyckas en inloggning stängs bara de verktyg som behöver
+        # STEG 5: Inloggning. Misslyckas en inloggning stängs bara de verktyg som behöver
         # den av; resten körs.
         # ===================================================================
-        Write-Step 4 'Inloggning' 'Du loggar in med ett konto som har läsrättigheter (se README). Ett webbläsarfönster öppnas för varje inloggning. Hinner du inte: tryck Ctrl+C och kör om scriptet.'
+        Write-Step 5 'Inloggning' 'Du loggar in med ett konto som har läsrättigheter (se README). Ett webbläsarfönster öppnas för varje inloggning. Hinner du inte: tryck Ctrl+C och kör om scriptet.'
 
-        # 3a. Azure CLI (används av azqr)
-        if (-not $SkipAzqr) {
-            try {
-                $cur = az account show --query tenantId -o tsv 2>$null
-                if ($cur -eq $TenantId) { Write-Ok 'Azure CLI är redan inloggad mot rätt tenant' }
-                else {
-                    Write-Todo 'Logga in i webbläsarfönstret som öppnas (Azure CLI)...'
-                    if ($DeviceLogin) { az login --tenant $TenantId --use-device-code --allow-no-subscriptions --only-show-errors | Out-Null }
-                    else              { az login --tenant $TenantId --allow-no-subscriptions --only-show-errors | Out-Null }
-                }
-                if ((az account show --query tenantId -o tsv 2>$null) -ne $TenantId) {
-                    Fail 'Azure CLI-inloggningen mot rätt tenant slutfördes inte.' 'Kör om scriptet och logga in när webbläsarfönstret öppnas (eller använd -DeviceLogin).'
-                }
-                # (Räknas i PowerShell: parenteser i --query förstörs av az.cmd:s citering.)
-                $subCount = @(az account list --query '[].id' -o tsv 2>$null | Where-Object { $_ }).Count
-                if ($subCount -lt 1) { Fail 'Kontot har inte åtkomst till någon subscription i tenanten.' 'Tilldela rollen Reader (se README) och kör om scriptet.' }
-                Write-Ok "Azure CLI inloggad ($subCount subscription(s) synliga)"
-            }
-            catch { Set-Status 'azqr' 'Fel' (Get-ErrorText $_); Write-Warn2 (Get-ErrorText $_); $SkipAzqr = $true }
-        }
+        # (Azure CLI-inloggningen och rollkontrollen görs redan i steg 3.)
 
-        # 3b. Az PowerShell (används av Governance Visualizer)
+        # 5a. Az PowerShell (används av Governance Visualizer)
         if (-not $SkipGovViz) {
             try {
                 Import-Module Az.Accounts -ErrorAction Stop
@@ -627,14 +777,14 @@ try {
             }
         }
 
-        if ($SkipGovViz -and $SkipAzqr -and $SkipMaester) {
+        if ($SkipGovViz -and $SkipAzqr -and $SkipMaester -and $SkipPortal) {
             Fail 'Inget verktyg återstår att köra: alla är bortvalda eller saknar inloggning/behörighet.' 'Se meddelandena ovan, åtgärda (logga in, få rätt roll) och kör om scriptet. Installationen är redan gjord, så det går snabbt.'
         }
 
         # ===================================================================
-        # STEG 5: Azure Governance Visualizer
+        # STEG 6: Azure Governance Visualizer
         # ===================================================================
-        Write-Step 5 'Azure Governance Visualizer' 'Går igenom management groups, subscriptions, policies och roller. 10-45 min i stora miljöer, några minuter i små. Mycket text i fönstret är normalt.'
+        Write-Step 6 'Azure Governance Visualizer' 'Går igenom management groups, subscriptions, policies och roller. 10-45 min i stora miljöer, några minuter i små. Mycket text i fönstret är normalt.'
         if ($SkipGovViz) { Write-Action 'Hoppas över'; Set-SkippedUnlessFailed 'Governance Visualizer' }
         else {
             try {
@@ -703,9 +853,9 @@ try {
         }
 
         # ===================================================================
-        # STEG 6: azqr
+        # STEG 7: azqr
         # ===================================================================
-        Write-Step 6 'Azure Quick Review (azqr)' 'Skannar alla subscriptions du har läsrätt till. 1-30 min.'
+        Write-Step 7 'Azure Quick Review (azqr)' 'Skannar alla subscriptions du har läsrätt till. 1-30 min.'
         if ($SkipAzqr) { Write-Action 'Hoppas över'; Set-SkippedUnlessFailed 'azqr' }
         else {
             try {
@@ -728,9 +878,9 @@ try {
         }
 
         # ===================================================================
-        # STEG 7: Maester
+        # STEG 8: Maester
         # ===================================================================
-        Write-Step 7 'Maester (Entra ID-tester)' 'Valfritt. 10-20 min.'
+        Write-Step 8 'Maester (Entra ID-tester)' 'Valfritt. 10-20 min.'
         if ($SkipMaester) { Write-Action 'Hoppas över'; Set-SkippedUnlessFailed 'Maester' }
         else {
             try {
@@ -766,13 +916,105 @@ try {
             catch { Write-Warn2 $_.Exception.Message; Set-Status 'Maester' 'Fel' $_.Exception.Message }
             finally { Pop-Location }
         }
+
+        # ===================================================================
+        # STEG 9: Defender och kostnad. Hämtar det som annars exporteras manuellt från portalen: Defender-planer,
+        # Secure Score, Defender-rekommendationer och kostnad för 12 månader. Allt är read-only och går via
+        # Azure Resource Manager (az rest), så inga extra tillägg behövs. Varje källa fångas för sig.
+        # ===================================================================
+        Write-Step 9 'Defender och kostnad' 'Hämtar Defender-planer, Secure Score, Defender-rekommendationer och kostnad för 12 månader direkt från Azure (read-only) och sparar dem som CSV i portal\. 1-5 min.'
+        if ($SkipPortal) { Write-Action 'Hoppas över'; Set-SkippedUnlessFailed 'Defender och kostnad' }
+        else {
+            $portalErrors = [System.Collections.Generic.List[string]]::new()
+            $portalOk = 0
+            try {
+                $subs = @(az account list --query '[].{id:id,name:name}' -o json 2>$null | ConvertFrom-Json)
+                $planRows = [System.Collections.Generic.List[object]]::new()
+                $scoreRows = [System.Collections.Generic.List[object]]::new()
+                $recRows = [System.Collections.Generic.List[object]]::new()
+                $costRows = [System.Collections.Generic.List[object]]::new()
+                foreach ($s in $subs) {
+                    $sid = $s.id; $sname = $s.name
+                    Write-Action "Prenumeration: $sname"
+
+                    # Defender-planer (på/av per tjänst)
+                    try {
+                        $r = Invoke-AzRest 'GET' "https://management.azure.com/subscriptions/$sid/providers/Microsoft.Security/pricings?api-version=2024-01-01"
+                        foreach ($p in @($r.value)) { $planRows.Add([pscustomobject]@{ Prenumeration = $sname; Plan = $p.name; Niva = $p.properties.pricingTier; Delplan = $p.properties.subPlan }) }
+                        $portalOk++
+                    }
+                    catch { $portalErrors.Add("Defender-planer ($sname): $($_.Exception.Message)") }
+
+                    # Secure Score
+                    try {
+                        $r = Invoke-AzRest 'GET' "https://management.azure.com/subscriptions/$sid/providers/Microsoft.Security/secureScores?api-version=2020-01-01"
+                        foreach ($sc in @($r.value)) { $scoreRows.Add([pscustomobject]@{ Prenumeration = $sname; Poang = $sc.properties.score.current; Max = $sc.properties.score.max; Andel = $sc.properties.score.percentage }) }
+                        $portalOk++
+                    }
+                    catch { $portalErrors.Add("Secure Score ($sname): $($_.Exception.Message)") }
+
+                    # Defender-rekommendationer (sidindelat; högst 30 sidor, och vi stannar om nextLink upprepas)
+                    try {
+                        $url = "https://management.azure.com/subscriptions/$sid/providers/Microsoft.Security/assessments?api-version=2021-06-01&`$expand=metadata"
+                        $pages = 0; $seen = @{}; $seenIds = @{}
+                        while ($url -and $pages -lt 30 -and -not $seen.ContainsKey($url)) {
+                            $seen[$url] = $true; $pages++
+                            $r = Invoke-AzRest 'GET' $url
+                            foreach ($a in @($r.value)) {
+                                # Defender kan returnera samma sida igen via en nextLink som pekar på sig själv: hoppa över dubletter.
+                                if ($a.id -and $seenIds.ContainsKey($a.id)) { continue }
+                                if ($a.id) { $seenIds[$a.id] = $true }
+                                $recRows.Add([pscustomobject]@{ Prenumeration = $sname; Rekommendation = $a.properties.displayName; Status = $a.properties.status.code; Allvarlighet = $a.properties.metadata.severity; Resurs = $a.properties.resourceDetails.Id })
+                            }
+                            $url = $r.nextLink
+                        }
+                        $portalOk++
+                    }
+                    catch { $portalErrors.Add("Defender-rekommendationer ($sname): $($_.Exception.Message)") }
+
+                    # Kostnad per månad, senaste 12 månaderna (Cost Management tillåter högst ett år)
+                    try {
+                        $from = (Get-Date).AddDays(-364).ToString('yyyy-MM-dd'); $to = (Get-Date).ToString('yyyy-MM-dd')
+                        $costBody = @{ type = 'ActualCost'; timeframe = 'Custom'; timePeriod = @{ from = "${from}T00:00:00+00:00"; to = "${to}T23:59:59+00:00" }
+                                       dataset = @{ granularity = 'Monthly'; aggregation = @{ totalCost = @{ name = 'Cost'; function = 'Sum' } } } }
+                        $r = Invoke-AzRest 'POST' "https://management.azure.com/subscriptions/$sid/providers/Microsoft.CostManagement/query?api-version=2023-03-01" $costBody
+                        $cols = @($r.properties.columns | ForEach-Object { $_.name })
+                        $iCost = [array]::IndexOf($cols, 'Cost'); $iCur = [array]::IndexOf($cols, 'Currency')
+                        $iMonth = [array]::IndexOf($cols, 'BillingMonth'); if ($iMonth -lt 0) { $iMonth = [array]::IndexOf($cols, 'UsageDate') }
+                        if ($iCost -lt 0 -or $iMonth -lt 0) { throw "oväntade kolumner i kostnadssvaret: $($cols -join ', ')" }
+                        foreach ($row in @($r.properties.rows)) {
+                            # ConvertFrom-Json gör om ISO-datum till DateTime, så formatera dem oberoende av språkinställning.
+                            $mv = $row[$iMonth]
+                            $ms = if ($mv -is [datetime]) { $mv.ToString('yyyy-MM-dd', [System.Globalization.CultureInfo]::InvariantCulture) } else { [string]$mv }
+                            $month = if ($ms -match '^\d{8}$') { $ms.Substring(0, 4) + '-' + $ms.Substring(4, 2) } else { $ms.Substring(0, [Math]::Min(7, $ms.Length)) }
+                            $costRows.Add([pscustomobject]@{ Prenumeration = $sname; Manad = $month; Kostnad = [math]::Round([double]$row[$iCost], 2); Valuta = $(if ($iCur -ge 0) { $row[$iCur] } else { '' }) })
+                        }
+                        $portalOk++
+                    }
+                    catch { $portalErrors.Add("Kostnad ($sname): $($_.Exception.Message)") }
+                }
+
+                # Spara som CSV (UTF-8 med BOM så att Excel visar å/ä/ö rätt)
+                $save = @(@('defender-planer.csv', $planRows), @('secure-score.csv', $scoreRows), @('defender-rekommendationer.csv', $recRows), @('kostnad.csv', $costRows))
+                foreach ($sv in $save) {
+                    if ($sv[1].Count) { $sv[1] | Export-Csv -Path (Join-Path $Dirs.portal $sv[0]) -NoTypeInformation -Encoding utf8BOM; Write-Ok "$($sv[0]): $($sv[1].Count) rader" }
+                }
+                if ($portalErrors.Count -eq 0) { Set-Status 'Defender och kostnad' 'OK' "Sparat i $($Dirs.portal)" }
+                else {
+                    foreach ($e in $portalErrors) { Write-Warn2 $e }
+                    $hint = if ($portalErrors -match 'AuthorizationFailed|Forbidden|does not have authorization|403') { ' Vanlig orsak: roll saknas (Reader, Security Reader eller Cost Management Reader), se README.' } else { '' }
+                    Set-Status 'Defender och kostnad' $(if ($portalOk -gt 0) { 'Delvis' } else { 'Fel' }) (($portalErrors -join ' | ') + $hint)
+                }
+            }
+            catch { Write-Warn2 $_.Exception.Message; Set-Status 'Defender och kostnad' 'Fel' $_.Exception.Message }
+        }
     }
 
     # =======================================================================
-    # STEG 8: HTML-rapport. Varje avsnitt byggs för sig; går ett avsnitt inte att bygga
+    # STEG 10: HTML-rapport. Varje avsnitt byggs för sig; går ett avsnitt inte att bygga
     # blir det en varning i rapporten, inte ett avbrott.
     # =======================================================================
-    Write-Step 8 'Bygger HTML-rapport' 'Kontrollerar och läser resultatfilerna och skriver rapport.html.'
+    Write-Step 10 'Bygger HTML-rapport' 'Kontrollerar och läser resultatfilerna och skriver rapport.html.'
     Add-Type -AssemblyName System.Web
 
     # HTML-koda text. (Får inte heta H: det är ett alias för Get-History.)
@@ -921,20 +1163,66 @@ try {
         if ($mh) { [void]$body.Append("<p>Fullständig rapport: <a href=`"$(RelLink $mh.FullName)`">$(Esc $mh.Name)</a></p>") }
     }
 
-    # --- Manuella exporter från portalen: bara en checklista över vad som lagts i portal\ ----
-    Invoke-Section 'Portalexporter' {
-        $portalFiles = Get-ChildItem $Dirs.portal -File -ErrorAction SilentlyContinue
-        $expected = @(
-            @{ Label = 'Defender for Cloud: rekommendationer (CSV)'; Pat = '*.csv' },
-            @{ Label = 'Skärmdump Secure Score / Defender-planer / kostnad'; Pat = '*.png' }
-        )
-        [void]$body.Append('<h2>Manuella exporter från portalen</h2><ul>')
-        foreach ($e in $expected) {
-            $n = @($portalFiles | Where-Object Name -like $e.Pat).Count
-            $mark = if ($n) { "&#10003; $n fil(er)" } else { '&#9744; saknas' }
-            [void]$body.Append("<li>$(Esc $e.Label): $mark</li>")
+    # --- Defender och kostnad: läs CSV-filerna som steg 9 sparade i portal\ ----------
+    Invoke-Section 'Defender och kostnad' {
+        $planF = Join-Path $Dirs.portal 'defender-planer.csv'
+        $scoreF = Join-Path $Dirs.portal 'secure-score.csv'
+        $recF = Join-Path $Dirs.portal 'defender-rekommendationer.csv'
+        $costF = Join-Path $Dirs.portal 'kostnad.csv'
+        [void]$body.Append('<h2>Defender och kostnad</h2>')
+        if (-not ((Test-Path $planF) -or (Test-Path $scoreF) -or (Test-Path $recF) -or (Test-Path $costF))) {
+            [void]$body.Append('<p class="muted">Ingen Defender- eller kostnadsdata hämtades (se körningsstatus ovan). Rollerna Security Reader och Cost Management Reader behövs.</p>')
         }
-        [void]$body.Append('</ul>')
+        else {
+            Write-Action 'Läser Defender- och kostnadsdata'
+            [void]$body.Append('<div class="tiles">')
+            # Secure Score
+            if (Test-Path $scoreF) {
+                $sc = Import-CsvChecked $scoreF @('Prenumeration', 'Poang', 'Max', 'Andel')
+                foreach ($r in @($sc)) {
+                    $pct = [math]::Round(([double]($r.Andel -replace ',', '.')) * 100)
+                    [void]$body.Append((Tile "Secure Score ($($r.Prenumeration))" ("{0} % ({1}/{2})" -f $pct, $r.Poang, $r.Max)))
+                }
+            }
+            # Defender-planer: hur många är på?
+            $plans = if (Test-Path $planF) { Import-CsvChecked $planF @('Prenumeration', 'Plan', 'Niva') } else { $null }
+            if ($null -ne $plans) {
+                $on = @($plans | Where-Object Niva -eq 'Standard').Count
+                [void]$body.Append((Tile 'Defender-planer påslagna' "$on av $(@($plans).Count)" $(if ($on -eq 0) { 'medium' } else { 'ok' })))
+            }
+            # Defender-rekommendationer som inte uppfylls
+            $recs = if (Test-Path $recF) { Import-CsvChecked $recF @('Rekommendation', 'Status', 'Allvarlighet', 'Resurs') } else { $null }
+            if ($null -ne $recs) {
+                $unh = @($recs | Where-Object Status -eq 'Unhealthy')
+                [void]$body.Append((Tile 'Rekommendationer: hög' @($unh | Where-Object Allvarlighet -eq 'High').Count 'high') + (Tile 'Medel' @($unh | Where-Object Allvarlighet -eq 'Medium').Count 'medium') + (Tile 'Låg' @($unh | Where-Object Allvarlighet -eq 'Low').Count 'low'))
+            }
+            # Kostnad
+            $costs = if (Test-Path $costF) { Import-CsvChecked $costF @('Prenumeration', 'Manad', 'Kostnad', 'Valuta') } else { $null }
+            if ($null -ne $costs -and @($costs).Count) {
+                foreach ($g in ($costs | Group-Object Valuta)) {
+                    $tot = ($g.Group | ForEach-Object { [double]($_.Kostnad -replace ',', '.') } | Measure-Object -Sum).Sum
+                    [void]$body.Append((Tile "Kostnad senaste 12 mån ($($g.Name))" ("{0:N0}" -f $tot)))
+                }
+            }
+            [void]$body.Append('</div>')
+
+            if ($null -ne $plans -and @($plans).Count) {
+                $planView = $plans | ForEach-Object { [pscustomobject]@{ Prenumeration = $_.Prenumeration; Plan = $_.Plan; Status = $(if ($_.Niva -eq 'Standard') { 'På' } else { 'Av' }) } }
+                [void]$body.Append('<h3>Defender-planer</h3>' + (ConvertTo-HtmlTable $planView @(@{Name='Prenumeration';Label='Prenumeration'}, @{Name='Plan';Label='Plan'}, @{Name='Status';Label='Status'}) 40))
+            }
+            if ($null -ne $recs -and @($recs | Where-Object Status -eq 'Unhealthy').Count) {
+                $sevOrder = @{ High = 0; Medium = 1; Low = 2 }
+                $recView = @($recs | Where-Object Status -eq 'Unhealthy' | Sort-Object { if ($sevOrder.ContainsKey($_.Allvarlighet)) { $sevOrder[$_.Allvarlighet] } else { 3 } } |
+                    ForEach-Object { [pscustomobject]@{ Impact = $_.Allvarlighet; Rekommendation = $_.Rekommendation; Resurs = ($_.Resurs -split '/')[-1] } })
+                [void]$body.Append('<h3>Defender-rekommendationer som inte uppfylls</h3>' + (ConvertTo-HtmlTable $recView @(@{Name='Impact';Label='Allvarlighet'}, @{Name='Rekommendation';Label='Rekommendation'}, @{Name='Resurs';Label='Resurs'}) 20))
+            }
+            if ($null -ne $costs -and @($costs).Count) {
+                [void]$body.Append('<h3>Kostnad per månad</h3>' + (ConvertTo-HtmlTable ($costs | Sort-Object Manad) @(@{Name='Prenumeration';Label='Prenumeration'}, @{Name='Manad';Label='Månad'}, @{Name='Kostnad';Label='Kostnad'}, @{Name='Valuta';Label='Valuta'}) 36))
+            }
+            [void]$body.Append('<p class="muted">Hämtat automatiskt via Azure. Fullständiga CSV-filer finns i mappen portal\. Azure Advisor-rekommendationer finns under azqr ovan.</p>')
+        }
+        $shots = @(Get-ChildItem $Dirs.portal -File -Filter '*.png' -ErrorAction SilentlyContinue).Count
+        [void]$body.Append("<p class=`"muted`">Skärmdumpar från portalen (valfritt): $(if ($shots) { "&#10003; $shots fil(er) i portal\" } else { 'inga' }).</p>")
     }
 
     # --- Status och varningar överst i rapporten ----------------------------

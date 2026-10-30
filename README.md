@@ -19,10 +19,10 @@ Scriptet ändrar ingenting i Azure eller Entra. Det som installeras hamnar på d
 $dest = Join-Path $env:USERPROFILE 'rapportkit-kit'
 $zip  = Join-Path $env:TEMP 'azure-rapportkit.zip'
 New-Item -ItemType Directory -Force $dest | Out-Null
-Invoke-WebRequest 'https://github.com/marcurell/azure-rapportkit/archive/refs/tags/v1.0.3.zip' -OutFile $zip
+Invoke-WebRequest 'https://github.com/marcurell/azure-rapportkit/archive/refs/tags/v1.0.4.zip' -OutFile $zip
 Expand-Archive $zip $dest -Force
 Get-ChildItem $dest -Recurse | Unblock-File
-$script = Join-Path $dest 'azure-rapportkit-1.0.3\Run-Rapportkit.ps1'
+$script = Join-Path $dest 'azure-rapportkit-1.0.4\Run-Rapportkit.ps1'
 $arg = '-NoExit -ExecutionPolicy Bypass -File "' + $script + '"'
 Start-Process powershell -ArgumentList $arg
 ```
@@ -61,9 +61,11 @@ Kontot som loggar in behöver:
 | Roll | Scope | Behövs för |
 |---|---|---|
 | Reader | Tenant Root Group | Governance Visualizer, azqr |
-| Security Reader | Tenant Root Group | Defender-uppgifter i azqr |
-| Cost Management Reader | Tenant Root Group | Kostnadsöversikt (manuell export) |
+| Security Reader | Tenant Root Group | Defender-rekommendationer och Secure Score |
+| Cost Management Reader | Tenant Root Group | Kostnad de senaste 12 månaderna |
 | Global Reader | Microsoft Entra ID | Maester |
+
+**Rollerna kontrolleras direkt efter inloggningen (steg 3), innan något mer hämtas.** Saknas en roll visar scriptet vilka kommandon som lägger till den och frågar om du vill fortsätta ändå. Standardsvaret är nej, och då avslutas körningen med instruktionen. Global Administrator i Entra ID ger inte automatiskt Azure-roller: se avsnittet "Ge dig själv läsrätt på tenant root" nedan.
 
 Har kontot bara åtkomst till en subscription faller Governance Visualizer på behörighetskontrollen (tenant root kräver Reader). De andra stegen körs ändå.
 
@@ -71,12 +73,14 @@ Har kontot bara åtkomst till en subscription faller Governance Visualizer på b
 
 1. **Förberedelser**: tenant-ID, resultatmappar, loggfil.
 2. **Förkontroll**: kontrollerar verktyg, nätverk (GitHub, PowerShell Gallery, inloggning, Azure, Graph), diskutrymme och om frågor kan besvaras, innan något hämtas. Saknas något visas det tydligt och du väljer om du vill fortsätta ändå.
-3. **Beroenden**: hämtar det som saknas. PowerShell 7, Azure CLI och azqr via winget (azqr annars direkt från GitHub), Governance Visualizer som zip från GitHub, moduler från PowerShell Gallery till `C:\rapportkit\_modules`.
-4. **Inloggning**: Azure CLI, Az PowerShell och valfritt Microsoft Graph. Därefter kontrolleras om kontot kan läsa management group som Governance Visualizer startar på; kan det inte får du välja att köra ändå eller hoppa över verktyget.
-5. **Governance Visualizer**
-6. **azqr**
-7. **Maester**
-8. **HTML-rapport**
+3. **Azure CLI, inloggning och rollkontroll**: installerar Azure CLI om det saknas, loggar in och kontrollerar kontots roller (Azure och Entra). Saknas roller får du instruktionen och väljer att avsluta eller fortsätta.
+4. **Beroenden**: hämtar det som saknas. PowerShell 7 och azqr via winget (azqr annars direkt från GitHub), Governance Visualizer som zip från GitHub, moduler från PowerShell Gallery till `C:\rapportkit\_modules`.
+5. **Inloggning**: Az PowerShell och valfritt Microsoft Graph. Därefter kontrolleras om kontot kan läsa management group som Governance Visualizer startar på.
+6. **Governance Visualizer**
+7. **azqr**
+8. **Maester**
+9. **Defender och kostnad**: hämtar automatiskt Defender-planer, Secure Score, Defender-rekommendationer och kostnad per månad för de senaste 12 månaderna, via Azure Resource Manager (read-only). Sparas som CSV i `portal\`. Det som tidigare var manuella exporter från portalen.
+10. **HTML-rapport**
 
 ## Flaggor
 
@@ -84,7 +88,7 @@ Har kontot bara åtkomst till en subscription faller Governance Visualizer på b
 |---|---|
 | `-TenantId <guid>` | Hoppar över tenant-frågan |
 | `-ManagementGroupId <id>` | Kör Governance Visualizer mot annan management group än tenant root |
-| `-SkipGovViz` / `-SkipAzqr` / `-SkipMaester` | Hoppa över ett verktyg |
+| `-SkipGovViz` / `-SkipAzqr` / `-SkipMaester` / `-SkipPortal` | Hoppa över ett verktyg (`-SkipPortal` = Defender och kostnad) |
 | `-DeviceLogin` | Inloggning med kod istället för webbläsarfönster |
 | `-NoInstall` | Hämta och installera ingenting |
 | `-Offline` | Ladda inte ner något, använd bara `tools\` (se nedan) |
