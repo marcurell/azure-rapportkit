@@ -1,0 +1,52 @@
+{
+  "name": "Moln på svenska",
+  "reportTitle": "Azure Rapportkit",
+  "tagline": "Molnet, på svenska",
+  "logo": {
+    "type": "wordmark",
+    "parts": [
+      { "text": "Molnpå", "color": "text" },
+      { "text": "svenska", "color": "accent" }
+    ]
+  },
+  "colors": {
+    "light": {
+      "bg": "#f0f5f1",
+      "surface": "#ffffff",
+      "surfaceAlt": "#e6eeea",
+      "border": "#c5d9cc",
+      "text": "#1a2e1f",
+      "muted": "#4a6655",
+      "accent": "#f97316",
+      "accentText": "#c2410c",
+      "onAccent": "#ffffff"
+    },
+    "dark": {
+      "bg": "#060f09",
+      "surface": "#102216",
+      "surfaceAlt": "#162d1c",
+      "border": "#1e3d26",
+      "text": "#c8d4cb",
+      "muted": "#8aa492",
+      "accent": "#f97316",
+      "accentText": "#fb923c",
+      "onAccent": "#060f09"
+    },
+    "status": {
+      "high": "#c0392b",
+      "medium": "#d97706",
+      "low": "#2d6b45",
+      "ok": "#2d6b45"
+    }
+  },
+  "fonts": {
+    "body": "Inter, \"Segoe UI\", system-ui, -apple-system, Roboto, Helvetica, Arial, sans-serif",
+    "heading": "Inter, \"Segoe UI\", system-ui, -apple-system, Roboto, Helvetica, Arial, sans-serif"
+  },
+  "footer": "Molnpåsvenska · molnpasvenska.se",
+  "contact": {
+    "text": "molnpasvenska.se",
+    "url": "https://molnpasvenska.se"
+  },
+  "customCss": ""
+}

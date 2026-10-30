@@ -21,10 +21,10 @@ Scriptet **skriver inget i Azure-resurser eller i Entra-konfigurationen**. Det g
 $dest = Join-Path $env:USERPROFILE 'rapportkit-kit'
 $zip  = Join-Path $env:TEMP 'azure-rapportkit.zip'
 New-Item -ItemType Directory -Force $dest | Out-Null
-Invoke-WebRequest 'https://github.com/marcurell/azure-rapportkit/archive/refs/tags/v1.0.7.zip' -OutFile $zip
+Invoke-WebRequest 'https://github.com/marcurell/azure-rapportkit/archive/refs/tags/v1.0.8.zip' -OutFile $zip
 Expand-Archive $zip $dest -Force
 Get-ChildItem $dest -Recurse | Unblock-File
-$script = Join-Path $dest 'azure-rapportkit-1.0.7\Run-Rapportkit.ps1'
+$script = Join-Path $dest 'azure-rapportkit-1.0.8\Run-Rapportkit.ps1'
 $arg = '-NoExit -ExecutionPolicy Bypass -File "' + $script + '"'
 Start-Process powershell -ArgumentList $arg
 ```
@@ -62,7 +62,7 @@ Allt hamnar i `<resultatmapp>\<år-månad>\`:
 
 | Fil | Innehåll |
 |---|---|
-| `rapport.html` | Sammanfattning: status, varningar, nyckeltal, begränsningar och fakta om körningen |
+| `rapport.html` (+ fem sidor) | Rapporten i en gemensam stil: **Översikt**, **Styrning**, **Resurser**, **Entra ID**, **Defender & kostnad** och **Om körningen**. Varje sida är fristående (stil och logga ligger inbäddade) och hämtar inget från internet |
 | `azgovviz\`, `azqr\`, `maester\` | Verktygens egna rapporter |
 | `portal\` | Defender- och kostnadsdata som CSV (inklusive Secure Score per kontroll) |
 | `rapportkit.log` | Rensad logg med tidsstämpel och nivå |
@@ -72,6 +72,20 @@ Allt hamnar i `<resultatmapp>\<år-månad>\`:
 Utanför mappen: `rapportkit_<tenant>_<år-månad>.zip` med en `.sha256`-fil, så att mottagaren kan kontrollera att filen kommit fram oförändrad (stäng av med `-NoZip`). Zippen är inte krypterad.
 
 **Utloggning:** scriptet loggar ut de sessioner (Azure CLI, Azure PowerShell, Microsoft Graph) som det själv skapade när det är klart. En inloggning som fanns innan rörs inte. Stäng av med `-KeepLogin`.
+
+## Utseende (branding)
+
+Rapporten är en flersidig webbplats i en gemensam stil, med navigering, ljust och mörkt läge (följer läsarens inställning) och utskriftsläge ("Skriv ut / spara som PDF"). Utseendet styrs av ett **tema**: en mapp med `theme.json` (färger, typsnitt, logga, sidfot) och eventuellt en logofil och egen CSS. Standardtemat är `molnpasvenska`.
+
+```powershell
+.\Run-Rapportkit.ps1 -Brand neutral                  # ett annat tema i branding\
+.\Run-Rapportkit.ps1 -BrandPath D:\teman\kundnamn    # ett tema var som helst
+.\Run-Rapportkit.ps1 -ReportOnly -Brand neutral      # bygg om rapporten från befintliga resultat, utan att köra verktygen
+```
+
+Se [branding/README.md](branding/README.md) för hur du skapar ett eget tema. Saknas eller är något ogiltigt i ett tema används inbyggda standardvärden och scriptet varnar.
+
+**Verktygens egna rapporter** (Governance Visualizer, Maester, azqr:s Excel) går inte att göra om till samma stil, så de länkas som fördjupning och öppnas i nytt fönster. Observera att Governance Visualizers egen rapport hämtar sin stil, sina skript och sina ikoner från internet (bland annat `www.azadvertizer.net` och `cdnjs.cloudflare.com`), och därför inte visas rätt offline. Sidorna i det här kitet gör inga externa anrop.
 
 ## Behörigheter
 
@@ -126,6 +140,8 @@ Har kontot bara åtkomst till en subscription faller Governance Visualizer på b
 | `-Plain` | Rita ramar med ASCII-tecken (för konsoler som visar specialtecken fel) |
 | `-LatestTools` | Använd senaste verktygsversioner istället för de testade, och hoppa över kontrollsummor |
 | `-AllowUnverified` | Fortsätt trots att en kontrollsumma inte stämmer. Använd bara efter egen kontroll |
+| `-Brand <namn>` | Rapportens utseende: ett tema i `branding\` (standard `molnpasvenska`) |
+| `-BrandPath <mapp>` | Ett tema i en valfri mapp (går före `-Brand`) |
 
 ## Offline-bundle
 
