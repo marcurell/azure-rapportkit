@@ -8,3 +8,6 @@ rapportkit/
 azqr_*
 AzGovViz*
 test-results/
+
+# Lokala säkerhetskopior
+*.bak*

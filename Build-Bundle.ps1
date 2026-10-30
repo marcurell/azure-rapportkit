@@ -3,6 +3,10 @@
   Laddar ner alla verktyg till tools\ och packar scriptet + verktygen i en zip som kan skickas till kunden.
   Kunden kör sedan: .\Run-Rapportkit.ps1 -Offline
 
+.DESCRIPTION
+  Versioner och kontrollsummor läses ur Run-Rapportkit.ps1 ($Pins), så att bundlen alltid innehåller exakt de
+  testade versionerna. Nedladdade zip-filer kontrolleras mot kontrollsumman innan paketet byggs.
+
 .PARAMETER Out
   Sökväg till zipfilen som skapas.
 .PARAMETER SkipInstallers
@@ -16,8 +20,24 @@ param(
 $ErrorActionPreference = 'Stop'
 $ProgressPreference = 'SilentlyContinue'
 
-# Samma fasta version som Run-Rapportkit.ps1 använder.
-$GvVersion = '6.7.2'
+# --- Läs pinnade versioner och kontrollsummor ur huvudscriptet (en enda källa)
+$src = Get-Content (Join-Path $PSScriptRoot 'Run-Rapportkit.ps1') -Raw
+function Get-Pin([string]$Pattern) {
+    $m = [regex]::Match($src, $Pattern)
+    if (-not $m.Success) { throw "Hittade inte '$Pattern' i Run-Rapportkit.ps1" }
+    $m.Groups[1].Value
+}
+$GvVersion = Get-Pin "\`$GvVersion\s*=\s*'([0-9.]+)'"
+$AzqrVersion = Get-Pin "Azqr\s*=\s*'([0-9.]+)'"
+$AzqrSha = Get-Pin "AzqrSha256\s*=\s*'([0-9A-F]{64})'"
+$GvSha = Get-Pin "GovVizSha256\s*=\s*'([0-9A-F]{64})'"
+$modules = @(
+    @{ N = 'Az.Accounts'; V = (Get-Pin "AzAccounts\s*=\s*'([0-9.]+)'") },
+    @{ N = 'AzAPICall'; V = (Get-Pin "AzApiCall\s*=\s*'([0-9.]+)'") },
+    @{ N = 'Pester'; V = (Get-Pin "Pester\s*=\s*'([0-9.]+)'") },
+    @{ N = 'Maester'; V = (Get-Pin "Maester\s*=\s*'([0-9.]+)'") }
+)
+
 $tools = Join-Path $PSScriptRoot 'tools'
 New-Item -ItemType Directory -Force "$tools\installers", "$tools\modules" | Out-Null
 $h = @{ 'User-Agent' = 'azure-rapportkit' }
@@ -50,33 +70,33 @@ function Assert-Zip($path, $mustContain) {
     finally { $z.Dispose() }
 }
 
-Write-Host 'azqr' -ForegroundColor Cyan
-$a = Get-GhAsset 'Azure/azqr' 'azqr-win-amd64.zip'
-Get-File $a.browser_download_url "$tools\azqr.zip" 1MB
-Assert-Zip "$tools\azqr.zip" '*azqr*.exe'
+# Kontrollerar SHA256 mot den testade kontrollsumman.
+function Assert-Sha($path, $expected, $what) {
+    $actual = (Get-FileHash $path -Algorithm SHA256).Hash
+    if ($actual -ne $expected) { throw "${what}: kontrollsumman stämmer inte (väntade $expected, fick $actual). Uppströmsfilen kan ha ändrats: kontrollera och uppdatera `$Pins i Run-Rapportkit.ps1." }
+    Write-Host "  ${what}: SHA256 stämmer"
+}
+
+Write-Host "azqr $AzqrVersion" -ForegroundColor Cyan
+Get-File "https://github.com/Azure/azqr/releases/download/v.$AzqrVersion/azqr-win-amd64.zip" "$tools\azqr.zip" 1MB
+Assert-Zip "$tools\azqr.zip" '*azqr.exe'
+Assert-Sha "$tools\azqr.zip" $AzqrSha 'azqr'
 
 Write-Host "Azure Governance Visualizer $GvVersion" -ForegroundColor Cyan
 Get-File "https://github.com/Azure/Azure-Governance-Visualizer/archive/refs/tags/$GvVersion.zip" "$tools\AzGovViz.zip" 100KB
 Assert-Zip "$tools\AzGovViz.zip" '*pwsh/AzGovVizParallel.ps1'
+Assert-Sha "$tools\AzGovViz.zip" $GvSha 'Governance Visualizer'
 
-Write-Host 'PowerShell-moduler' -ForegroundColor Cyan
-# Pester: Maester kräver 5.5+ och är testad mot 5.x, så version 6 hålls utanför.
-$modules = @(@{ N = 'Az.Accounts' }, @{ N = 'AzAPICall'; V = '1.4.1' }, @{ N = 'Pester'; Min = '5.5.0'; Max = '6.0.0' }, @{ N = 'Maester' })
+Write-Host 'PowerShell-moduler (fasta versioner)' -ForegroundColor Cyan
 foreach ($m in $modules) {
     $dest = Join-Path $tools "modules\$($m.N)"
     if (Test-Path $dest) { Remove-Item $dest -Recurse -Force }
     Write-Host "  $($m.N) $($m.V)"
     if (Get-Command Save-PSResource -ErrorAction SilentlyContinue) {
-        $p = @{ Name = $m.N; Path = "$tools\modules"; TrustRepository = $true; Quiet = $true }
-        if ($m.V) { $p.Version = $m.V }
-        elseif ($m.Min) { $p.Version = "[$($m.Min),$($m.Max))" }
-        Save-PSResource @p
+        Save-PSResource -Name $m.N -Version $m.V -Path "$tools\modules" -TrustRepository -Quiet
     }
     else {
-        $p = @{ Name = $m.N; Path = "$tools\modules"; Force = $true }
-        if ($m.V) { $p.RequiredVersion = $m.V }
-        if ($m.Min) { $p.MinimumVersion = $m.Min; $p.MaximumVersion = '5.99.99' }
-        Save-Module @p
+        Save-Module -Name $m.N -RequiredVersion $m.V -Path "$tools\modules" -Force
     }
     if (-not (Test-Path $dest)) { throw "Modulen $($m.N) hämtades inte till $dest" }
 }
@@ -96,9 +116,14 @@ if (Test-Path $Out) { Remove-Item $Out -Force }
 $stage = Join-Path $env:TEMP 'rapportkit-stage'
 if (Test-Path $stage) { Remove-Item $stage -Recurse -Force }
 New-Item -ItemType Directory $stage | Out-Null
-Copy-Item "$PSScriptRoot\Run-Rapportkit.ps1", "$PSScriptRoot\README.md", "$PSScriptRoot\LICENSE" $stage
+foreach ($file in 'Run-Rapportkit.ps1', 'README.md', 'LICENSE', 'THIRD-PARTY-NOTICES.md') { Copy-Item (Join-Path $PSScriptRoot $file) $stage }
+New-Item -ItemType Directory "$stage\docs" | Out-Null
+Copy-Item (Join-Path $PSScriptRoot 'docs\KUNDINFO.md') "$stage\docs"
 Copy-Item $tools "$stage\tools" -Recurse
 Compress-Archive "$stage\*" $Out
 Remove-Item $stage -Recurse -Force
 Assert-Zip $Out '*Run-Rapportkit.ps1'
+$bundleHash = (Get-FileHash $Out -Algorithm SHA256).Hash
+Set-Content -Path "$Out.sha256" -Value ('{0} *{1}' -f $bundleHash, (Split-Path $Out -Leaf)) -Encoding ascii
 Write-Host ("Klart: {0} ({1:N0} MB)" -f $Out, ((Get-Item $Out).Length / 1MB)) -ForegroundColor Green
+Write-Host "SHA256: $bundleHash (sparad i $(Split-Path $Out -Leaf).sha256)"

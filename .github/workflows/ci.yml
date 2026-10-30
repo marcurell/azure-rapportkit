@@ -1,0 +1,68 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+  schedule:
+    - cron: '17 5 * * 1'   # varje måndag: upptäcker om uppströmsfiler (azqr, Governance Visualizer) ändrats
+  workflow_dispatch:
+
+jobs:
+  test:
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Syntaxkontroll i Windows PowerShell 5.1 och PowerShell 7
+        shell: pwsh
+        run: |
+          $ok = $true
+          foreach ($file in 'Run-Rapportkit.ps1', 'Build-Bundle.ps1') {
+            foreach ($ps in 'powershell', 'pwsh') {
+              $cmd = "`$e=`$null; [void][System.Management.Automation.Language.Parser]::ParseFile('$((Resolve-Path $file).Path)',[ref]`$null,[ref]`$e); if (`$e) { `$e | ForEach-Object { `$_.Message }; exit 1 }"
+              & $ps -NoProfile -Command $cmd
+              if ($LASTEXITCODE -ne 0) { Write-Host "::error file=$file::Syntaxfel i $ps"; $ok = $false } else { Write-Host "$file parsar i $ps" }
+            }
+          }
+          if (-not $ok) { exit 1 }
+
+      - name: Statisk analys (PSScriptAnalyzer, fel stoppar)
+        shell: pwsh
+        run: |
+          Install-Module PSScriptAnalyzer -Force -Scope CurrentUser
+          $r = Invoke-ScriptAnalyzer -Path . -Recurse -Severity Error
+          $r | Format-Table -AutoSize
+          if ($r) { exit 1 }
+
+      - name: Enhetstester (Pester)
+        shell: pwsh
+        run: |
+          Install-Module Pester -MinimumVersion 5.5.0 -Force -Scope CurrentUser -SkipPublisherCheck
+          $cfg = New-PesterConfiguration
+          $cfg.Run.Path = 'tests'
+          $cfg.Run.Exit = $true
+          $cfg.Output.Verbosity = 'Detailed'
+          Invoke-Pester -Configuration $cfg
+
+      - name: Kontrollerar att de pinnade kontrollsummorna fortfarande stämmer uppströms
+        shell: pwsh
+        run: |
+          $src = Get-Content Run-Rapportkit.ps1 -Raw
+          $azqrVer = [regex]::Match($src, "Azqr\s*=\s*'([0-9.]+)'").Groups[1].Value
+          $azqrSha = [regex]::Match($src, "AzqrSha256\s*=\s*'([0-9A-F]{64})'").Groups[1].Value
+          $gvVer   = [regex]::Match($src, "\`$GvVersion\s*=\s*'([0-9.]+)'").Groups[1].Value
+          $gvSha   = [regex]::Match($src, "GovVizSha256\s*=\s*'([0-9A-F]{64})'").Groups[1].Value
+          $ok = $true
+          $items = @(
+            @{ Name = "azqr $azqrVer"; Url = "https://github.com/Azure/azqr/releases/download/v.$azqrVer/azqr-win-amd64.zip"; Sha = $azqrSha },
+            @{ Name = "Governance Visualizer $gvVer"; Url = "https://github.com/Azure/Azure-Governance-Visualizer/archive/refs/tags/$gvVer.zip"; Sha = $gvSha }
+          )
+          foreach ($i in $items) {
+            $f = Join-Path $env:RUNNER_TEMP ([guid]::NewGuid().ToString('N') + '.zip')
+            Invoke-WebRequest $i.Url -OutFile $f -Headers @{ 'User-Agent' = 'ci' }
+            $h = (Get-FileHash $f -Algorithm SHA256).Hash
+            if ($h -eq $i.Sha) { Write-Host "OK   $($i.Name): $h" }
+            else { Write-Host "::error::$($i.Name): kontrollsumman har ändrats (väntade $($i.Sha), fick $h)"; $ok = $false }
+          }
+          if (-not $ok) { exit 1 }

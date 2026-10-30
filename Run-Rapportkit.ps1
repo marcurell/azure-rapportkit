@@ -28,8 +28,13 @@
     Steg 10 HTML-rapport     Sammanfattning i <resultatmapp>\rapport.html. Resultatfilerna kontrolleras
                              innan de läses; avvikelser visas som varningar i rapporten.
 
-  Allt är read-only: inget i Azure eller Entra ändras. Det som installeras hamnar på den här
-  datorn (program via winget, moduler i <OutputRoot>\_modules).
+  Scriptet skriver inget i Azure-resurser eller i Entra-konfigurationen och använder bara läsande anrop. Det gör
+  däremot följande, vilket är bra att veta:
+    - installerar verktyg på den här datorn (program via winget, moduler i <OutputRoot>\_modules),
+    - skapar inloggningssessioner, som syns i tenantens inloggnings- och granskningsloggar,
+    - för Maester måste en administratör godkänna läsbehörigheter för "Microsoft Graph Command Line Tools"
+      (admin consent), vilket är en ändring i tenanten,
+    - sparar resultat med konfidentiell information i resultatmappen (zip skapas om du inte anger -NoZip).
 
   FELHANTERING
     - Ett verktyg som misslyckas stoppar inte de andra. Felet och vad du ska göra syns i
@@ -45,7 +50,7 @@
 .PARAMETER ManagementGroupId
   Management group som Governance Visualizer startar på. Standard är tenant root (= tenant-ID).
 .PARAMETER OutputRoot
-  Rotmapp för resultat och hämtade verktyg. Standard C:\rapportkit.
+  Rotmapp för resultat och hämtade verktyg. Anges den inte frågar scriptet var den ska ligga (förslag: %USERPROFILE%\rapportkit).
 .PARAMETER Period
   Namn på undermappen för den här körningen. Standard är innevarande månad (yyyy-MM).
 .PARAMETER SkipGovViz / SkipAzqr / SkipMaester
@@ -62,7 +67,21 @@
   Hoppa över hämtningen av Defender- och kostnadsdata (steg 9).
 .PARAMETER MaxPortalSubscriptions
   Högst så många (aktiva) prenumerationer hämtas Defender- och kostnadsdata för (standard 25). Cost Management
-  begränsar anrop hårt, så hundratals prenumerationer tar timmar..PARAMETER Yes
+  begränsar anrop hårt, så hundratals prenumerationer tar timmar.
+.PARAMETER HidePersonalData
+  Dölj användardata (namn och e-postadresser i rolltilldelningar) i Governance Visualizers rapport. Gäller inte
+  Maesters rapport, som kan innehålla användarnamn.
+.PARAMETER KeepLogin
+  Logga inte ut från de sessioner scriptet själv skapade (Azure CLI, Azure PowerShell, Microsoft Graph).
+.PARAMETER NoZip
+  Skapa ingen zip-fil av resultatet.
+.PARAMETER Plain
+  Rita ramar och staplar med vanliga ASCII-tecken (för konsoler som visar specialtecken fel).
+.PARAMETER LatestTools
+  Använd senaste versionerna av verktygen istället för de testade (pinnade) och hoppa över kontrollsummor.
+.PARAMETER AllowUnverified
+  Fortsätt även om en nedladdad fil inte stämmer med den testade kontrollsumman. Använd bara efter egen kontroll.
+.PARAMETER Yes
   Svara ja på alla "fortsätta ändå?"-frågor (förkontroll och behörighetskontroll), t.ex. för automatiska körningar.
 
 .EXAMPLE
@@ -74,7 +93,7 @@
 param(
     [string]$TenantId,
     [string]$ManagementGroupId,
-    [string]$OutputRoot = 'C:\rapportkit',
+    [string]$OutputRoot,
     [string]$Period = (Get-Date -Format 'yyyy-MM'),
     [switch]$SkipGovViz,
     [switch]$SkipAzqr,
@@ -85,6 +104,12 @@ param(
     [switch]$ReportOnly,
     [switch]$SkipPortal,
     [int]$MaxPortalSubscriptions = 25,
+    [switch]$HidePersonalData,
+    [switch]$KeepLogin,
+    [switch]$NoZip,
+    [switch]$Plain,
+    [switch]$LatestTools,
+    [switch]$AllowUnverified,
     [switch]$Yes
 )
 
@@ -109,26 +134,217 @@ $TotalSteps = 10
 # Governance Visualizer hämtas som en fast version (den som testats). Ändras med flit, inte av misstag.
 $GvVersion = '6.7.2'
 $GvUrl = "https://github.com/Azure/Azure-Governance-Visualizer/archive/refs/tags/$GvVersion.zip"
+$KitVersion = '1.0.7'
+
+# Testade (pinnade) verktygsversioner, och kontrollsummor (SHA256) för de zip-filer som hämtas direkt. Då får kunden
+# samma verktyg som vi har testat, och en ändrad fil upptäcks. Verktygen installerade via winget kontrolleras av winget
+# själv mot dess manifest. -LatestTools byter till senaste versioner och stänger av kontrollsummorna.
+$Pins = @{
+    Azqr         = '4.3.0'
+    AzqrSha256   = '1A88B48AD88B9F02CB95A6AFA76A825A0CD3F7A8340CAEDD3294105328C4F3EC'
+    GovVizSha256 = 'EA6E6F85846CD3D257A5D77558DDCC877198B42F99BA0B15A58715718CE80F86'
+    AzAccounts   = '5.5.3'
+    AzApiCall    = '1.4.1'
+    Pester       = '5.9.1'
+    Maester      = '2.3.0'
+}
+if ($LatestTools) { foreach ($k in @($Pins.Keys)) { if ($k -ne 'AzApiCall') { $Pins[$k] = $null } } }
+$AzqrZipUrl = "https://github.com/Azure/azqr/releases/download/v.$($Pins.Azqr)/azqr-win-amd64.zip"
+
+# Tillstånd som behövs vid avslutet (utloggning). Sätts längre ned när scriptet själv loggar in.
+$azReady = $false
+$azWasLoggedIn = $false
+$azPsByUs = $false
+$graphByUs = $false
 
 $ExitCode = 0            # slutkod, se FELHANTERING ovan
 $Completed = $false      # sätts när hela körningen gått igenom
 $AbortShown = $false     # true när vi redan skrivit ett eget avbrottsmeddelande
 
 # ===========================================================================
-# Hjälpfunktioner för utskrift. Varje åtgärd skriver en rad så att man ser vad som händer.
+# Utskrift (UI) och loggning. Varje åtgärd skriver en rad i fönstret och en rad i loggen.
 # ===========================================================================
 
-# Rubrik för ett huvudsteg, med förklaring av vad steget gör och ungefär hur länge det tar.
-function Write-Step([int]$Number, [string]$Title, [string]$Explain) {
-    Write-Host ''
-    Write-Host ("=== Steg {0}/{1}: {2} ===" -f $Number, $TotalSteps, $Title) -ForegroundColor Cyan
-    if ($Explain) { Write-Host "    $Explain" -ForegroundColor DarkCyan }
+# --- Tecken för ramar och staplar. De byggs av teckenkoder så att det fungerar oavsett hur filen är sparad.
+#     -Plain ger vanliga ASCII-tecken (för konsoler som ritar specialtecken fel).
+$UiWidth = 78
+if ($Plain) { $G = @{ H = '-'; V = '|'; TL = '+'; TR = '+'; BL = '+'; BR = '+'; DH = '='; DV = '|'; DTL = '+'; DTR = '+'; DBL = '+'; DBR = '+'; Full = '#'; Empty = '.' } }
+else {
+    $G = @{}
+    foreach ($pair in @(@('H', 0x2500), @('V', 0x2502), @('TL', 0x250C), @('TR', 0x2510), @('BL', 0x2514), @('BR', 0x2518), @('DH', 0x2550), @('DV', 0x2551), @('DTL', 0x2554), @('DTR', 0x2557), @('DBL', 0x255A), @('DBR', 0x255D), @('Full', 0x2588), @('Empty', 0x2591))) { $G[$pair[0]] = [string][char]$pair[1] }
+    try { [Console]::OutputEncoding = [System.Text.Encoding]::UTF8 } catch { }
 }
-function Write-Action($msg) { Write-Host "  -> $msg" -ForegroundColor White }      # "nu gör jag detta"
-function Write-Ok($msg)     { Write-Host "  [OK] $msg" -ForegroundColor Green }    # det gick bra
-function Write-Warn2($msg)  { Write-Host "  [!]  $msg" -ForegroundColor Yellow }   # något gick fel, vi går vidare
-function Write-Todo($msg)   { Write-Host "  >>> $msg" -ForegroundColor Magenta }  # något DU ska göra
 
+# --- Rensad logg: tidsstämpel, nivå och text, utan färger. Före steg 1 buffras raderna tills resultatmappen finns.
+#     Den fullständiga konsolutskriften (med verktygens egen text) sparas separat i rapportkit-console.log.
+$script:LogFile = $null
+$script:LogBuffer = [System.Collections.Generic.List[string]]::new()
+$script:RunStart = Get-Date
+function Write-Log([string]$Level, [string]$Msg) {
+    $line = '{0:yyyy-MM-dd HH:mm:ss}  {1,-7} {2}' -f (Get-Date), $Level, ($Msg -replace '\s*\r?\n\s*', ' ')
+    if ($script:LogFile) { try { Add-Content -Path $script:LogFile -Value $line -Encoding utf8 } catch { } }
+    else { $script:LogBuffer.Add($line) }
+}
+# Startar loggfilen i resultatmappen: skriver en rubrik med miljöuppgifter och tömmer det som buffrats.
+function Initialize-Log([string]$Dir) {
+    $script:LogFile = Join-Path $Dir 'rapportkit.log'
+    $opts = ($BoundParams.Keys | Sort-Object | ForEach-Object { if ($BoundParams[$_] -is [switch]) { "-$_" } else { "-$_ $($BoundParams[$_])" } }) -join ' '
+    $hdr = @(
+        ('# Azure Rapportkit {0}' -f $KitVersion),
+        ('# Start: {0:yyyy-MM-dd HH:mm:ss}   Värd: {1}   OS: {2}   PowerShell: {3}' -f $script:RunStart, $env:COMPUTERNAME, [Environment]::OSVersion.VersionString, $PSVersionTable.PSVersion),
+        ("# Parametrar: $opts"),
+        '# Tid                  Nivå    Meddelande'
+    )
+    Add-Content -Path $script:LogFile -Value $hdr -Encoding utf8
+    foreach ($l in $script:LogBuffer) { Add-Content -Path $script:LogFile -Value $l -Encoding utf8 }
+    $script:LogBuffer.Clear()
+}
+
+# --- Hjälpfunktioner för text och ramar
+function Format-Duration([double]$Sec) {
+    if ($Sec -lt 60) { return ('{0:N0} s' -f $Sec) }
+    '{0} min {1:00} s' -f [int][math]::Floor($Sec / 60), [int]($Sec % 60)
+}
+# Radbryter text vid ord så att ingen rad blir längre än $Width.
+function Format-Wrap([string]$Text, [int]$Width, [string]$Indent = '') {
+    $out = [System.Collections.Generic.List[string]]::new()
+    $line = ''
+    foreach ($w in ($Text -split '\s+')) {
+        if (-not $w) { continue }
+        if ($line -and (($line.Length + $w.Length + 1) -gt $Width)) { $out.Add($Indent + $line); $line = $w }
+        else { $line = if ($line) { "$line $w" } else { $w } }
+    }
+    if ($line) { $out.Add($Indent + $line) }
+    , $out
+}
+# En rad i en ram: $Segments = lista med @(text, färg). Fylls ut till ramens bredd.
+function Write-BoxLine($Segments, [string]$EdgeColor = 'DarkCyan', [switch]$Double) {
+    $edge = if ($Double) { $G.DV } else { $G.V }
+    $len = 0
+    foreach ($s in $Segments) { $len += ([string]$s[0]).Length }
+    Write-Host $edge -NoNewline -ForegroundColor $EdgeColor
+    foreach ($s in $Segments) { Write-Host ([string]$s[0]) -NoNewline -ForegroundColor $s[1] }
+    Write-Host ((' ' * [math]::Max(0, $UiWidth - 2 - $len)) + $edge) -ForegroundColor $EdgeColor
+}
+function Write-Badge([string]$Text, [string]$Color) {
+    $w = 9
+    $pad = [int][math]::Floor(($w - $Text.Length) / 2)
+    Write-Host (((' ' * [math]::Max(0, $pad)) + $Text).PadRight($w)) -NoNewline -ForegroundColor Black -BackgroundColor $Color
+}
+# En statusrad: färgad etikett följt av text som radbryts med hängande indrag.
+function Write-Line([string]$Badge, [string]$Color, [string]$Msg, [string]$MsgColor = 'Gray') {
+    $lines = Format-Wrap $Msg ($UiWidth - 14)
+    Write-Host '  ' -NoNewline
+    Write-Badge $Badge $Color
+    Write-Host ('  ' + $(if ($lines.Count) { $lines[0] } else { '' })) -ForegroundColor $MsgColor
+    for ($i = 1; $i -lt $lines.Count; $i++) { Write-Host ((' ' * 13) + $lines[$i]) -ForegroundColor $MsgColor }
+}
+
+# --- Rubrik för ett huvudsteg: ruta med stegnummer, förloppsstapel och rubrik, plus en förklaring.
+$script:StepLog = [ordered]@{}
+$script:CurStep = 0
+$script:CurTitle = ''
+$script:CurStart = $null
+# Stänger det pågående steget och sparar hur lång tid det tog.
+function Complete-Step {
+    if ($script:CurStep -gt 0 -and $script:CurStart) {
+        $sec = [math]::Round(((Get-Date) - $script:CurStart).TotalSeconds, 1)
+        $script:StepLog[[string]$script:CurStep] = @{ Title = $script:CurTitle; Seconds = $sec }
+        Write-Log 'STEG' ('Steg {0} klart: {1} ({2:N1} s)' -f $script:CurStep, $script:CurTitle, $sec)
+        $script:CurStart = $null
+    }
+}
+function Write-Step([int]$Number, [string]$Title, [string]$Explain) {
+    Complete-Step
+    $script:CurStep = $Number; $script:CurTitle = $Title; $script:CurStart = Get-Date
+    $filled = [int][math]::Round(10 * $Number / $TotalSteps)
+    $bar = ($G.Full * $filled) + ($G.Empty * (10 - $filled))
+    $label = ' STEG {0} AV {1}  ' -f $Number, $TotalSteps
+    $titleMax = $UiWidth - 2 - $label.Length - 10 - 2
+    $shown = if ($Title.Length -gt $titleMax) { $Title.Substring(0, $titleMax - 1) + '.' } else { $Title }
+    Write-Host ''
+    Write-Host ($G.TL + ($G.H * ($UiWidth - 2)) + $G.TR) -ForegroundColor DarkCyan
+    Write-BoxLine @(@($label, 'Cyan'), @($bar, 'Cyan'), @(('  ' + $shown), 'White'))
+    Write-Host ($G.BL + ($G.H * ($UiWidth - 2)) + $G.BR) -ForegroundColor DarkCyan
+    if ($Explain) { foreach ($l in (Format-Wrap $Explain ($UiWidth - 4))) { Write-Host ('  ' + $l) -ForegroundColor DarkGray } }
+    Write-Log 'STEG' ('Steg {0} av {1}: {2}' -f $Number, $TotalSteps, $Title)
+}
+
+# --- Rader under ett steg
+function Write-Action($msg) {                       # "nu gör jag detta"
+    Write-Log 'ÅTGÄRD' ([string]$msg)
+    $lines = Format-Wrap ([string]$msg) ($UiWidth - 6)
+    for ($i = 0; $i -lt $lines.Count; $i++) { Write-Host ($(if ($i -eq 0) { '   > ' } else { '     ' }) + $lines[$i]) -ForegroundColor White }
+}
+function Write-Ok($msg)    { Write-Log 'OK' ([string]$msg);     Write-Line 'OK' 'Green' ([string]$msg) 'Gray' }            # det gick bra
+function Write-Warn2($msg) { Write-Log 'VARNING' ([string]$msg); Write-Line 'VARNING' 'Yellow' ([string]$msg) 'Yellow' }   # något gick fel, vi går vidare
+function Write-Todo($msg)  { Write-Log 'GÖR' ([string]$msg);     Write-Line 'GÖR' 'Magenta' ([string]$msg) 'Magenta' }       # något DU ska göra
+# En kontrollrad (förkontroll, rollkontroll): OK / INFO / VARNING / SAKNAS.
+function Write-Check([string]$State, [string]$Name, [string]$Detail) {
+    $color = switch ($State) { 'OK' { 'Green' } 'INFO' { 'Cyan' } 'VARNING' { 'Yellow' } default { 'Red' } }
+    $msgColor = switch ($State) { 'VARNING' { 'Yellow' } 'SAKNAS' { 'Red' } default { 'Gray' } }
+    Write-Log $State "${Name}: $Detail"
+    Write-Line $State $color "${Name}: $Detail" $msgColor
+}
+function Write-KeyValue([string]$Key, [string]$Value) {
+    Write-Host ('   {0,-11}' -f $Key) -NoNewline -ForegroundColor DarkGray
+    Write-Host $Value -ForegroundColor White
+}
+
+# --- Banner som visas först
+function Write-Banner {
+    Write-Host ''
+    Write-Host ($G.DTL + ($G.DH * ($UiWidth - 2)) + $G.DTR) -ForegroundColor Cyan
+    Write-BoxLine @(, @('', 'White')) 'Cyan' -Double
+    Write-BoxLine @(@('   AZURE RAPPORTKIT', 'White'), @("   v$KitVersion", 'Cyan')) 'Cyan' -Double
+    Write-BoxLine @(, @('   Kartlägger styrning, säkerhet och kostnad i en Azure-tenant', 'Gray')) 'Cyan' -Double
+    Write-BoxLine @(, @('', 'White')) 'Cyan' -Double
+    Write-BoxLine @(, @('   Skriver inget i Azure-resurser eller Entra-konfigurationen.', 'DarkGray')) 'Cyan' -Double
+    Write-BoxLine @(, @('   Avbryt med Ctrl+C när som helst och kör om: det som är gjort återanvänds.', 'DarkGray')) 'Cyan' -Double
+    Write-Host ($G.DBL + ($G.DH * ($UiWidth - 2)) + $G.DBR) -ForegroundColor Cyan
+    Write-Log 'INFO' "Azure Rapportkit v$KitVersion startar"
+}
+
+# --- Statusetikett för en sammanfattningsrad
+function Get-StateBadge([string]$State) {
+    switch ($State) {
+        'OK'     { return @('OK', 'Green') }
+        'Fel'    { return @('FEL', 'Red') }
+        'Delvis' { return @('DELVIS', 'Yellow') }
+        default  { return @('HOPPAD', 'DarkGray') }
+    }
+}
+
+# --- Sammanfattningsruta i slutet: en rad per verktyg med tid, noteringar och sökvägar.
+function Write-SummaryBox($StatusTable, $Facts) {
+    $toolStep = @{ 'Governance Visualizer' = 6; 'azqr' = 7; 'Maester' = 8; 'Defender och kostnad' = 9 }
+    Write-Host ''
+    Write-Host ($G.DTL + ($G.DH * ($UiWidth - 2)) + $G.DTR) -ForegroundColor Cyan
+    Write-BoxLine @(, @('   SAMMANFATTNING', 'White')) 'Cyan' -Double
+    Write-Host ($G.DBL + ($G.DH * ($UiWidth - 2)) + $G.DBR) -ForegroundColor Cyan
+    foreach ($k in $StatusTable.Keys) {
+        $s = $StatusTable[$k]
+        $b = Get-StateBadge $s.State
+        $dur = ''
+        if ($toolStep.ContainsKey($k) -and $script:StepLog.Contains([string]$toolStep[$k]) -and $s.State -ne 'Hoppad över') { $dur = '   ' + (Format-Duration $script:StepLog[[string]$toolStep[$k]].Seconds) }
+        Write-Host '  ' -NoNewline
+        Write-Badge $b[0] $b[1]
+        Write-Host ('  ' + $k) -NoNewline -ForegroundColor White
+        Write-Host $dur -ForegroundColor DarkGray
+        if ($s.State -in 'Fel', 'Delvis' -and $s.Note) {
+            foreach ($l in (Format-Wrap $s.Note ($UiWidth - 14))) { Write-Host ((' ' * 13) + $l) -ForegroundColor Yellow }
+        }
+    }
+    Write-Host ''
+    foreach ($fact in $Facts) {
+        $lines = Format-Wrap ([string]$fact[1]) ($UiWidth - 18)
+        Write-Host ('  {0,-14}' -f $fact[0]) -NoNewline -ForegroundColor DarkGray
+        Write-Host ($(if ($lines.Count) { $lines[0] } else { '' })) -ForegroundColor White
+        for ($i = 1; $i -lt $lines.Count; $i++) { Write-Host ((' ' * 16) + $lines[$i]) -ForegroundColor White }
+    }
+    Write-Host ($G.H * $UiWidth) -ForegroundColor DarkCyan
+}
+# ===========================================================================
 # ===========================================================================
 # Felhantering
 # ===========================================================================
@@ -174,7 +390,7 @@ function Add-Warning([string]$msg) { $Warnings.Add($msg); Write-Warn2 $msg }
 
 # Status per verktyg, visas i konsolen och överst i rapporten.
 $Status = [ordered]@{}
-function Set-Status($step, $state, $note = '') { $Status[$step] = @{ State = $state; Note = $note } }
+function Set-Status($step, $state, $note = '') { $Status[$step] = @{ State = $state; Note = $note }; Write-Log 'STATUS' "$step = $state $note" }
 # Sätter "Hoppad över" bara om ett fel inte redan registrerats för steget.
 function Set-SkippedUnlessFailed($step, $note = '') { if (-not $Status.Contains($step)) { Set-Status $step 'Hoppad över' $note } }
 
@@ -318,6 +534,133 @@ function Get-RoleInstructions($Missing) {
     $lines
 }
 
+# Ställer en ja/nej-fråga med standardsvar. -Yes svarar ja. Kan frågan inte ställas (ingen inmatning) används standardsvaret.
+function Read-YesNo([string]$Question, [bool]$DefaultYes = $true) {
+    if ($Yes) { Write-Log 'INFO' "$Question -> ja (-Yes)"; return $true }
+    $hint = if ($DefaultYes) { 'J/n' } else { 'j/N' }
+    try { $a = Read-Host "  $Question ($hint)" } catch { return $DefaultYes }
+    $a = ("$a").Trim([char]0xFEFF).Trim()
+    if (-not $a) { return $DefaultYes }
+    return [bool]($a -match '^[jJyY]')
+}
+
+# Kontrollerar SHA256 för en nedladdad fil mot den testade kontrollsumman. Stämmer den inte avbryts körningen, om inte
+# -AllowUnverified (eller -LatestTools, som inte har några kontrollsummor) är satt.
+function Assert-FileHash([string]$Path, [string]$Expected, [string]$What) {
+    if (-not $Expected) { return }
+    $actual = (Get-FileHash -Path $Path -Algorithm SHA256).Hash
+    if ($actual -eq $Expected) { Write-Ok "${What}: kontrollsumman (SHA256) stämmer med den testade versionen"; return }
+    if ($AllowUnverified) { Add-Warning "${What}: kontrollsumman stämmer inte (väntade $Expected, fick $actual). Fortsätter eftersom -AllowUnverified är satt."; return }
+    Fail "${What}: kontrollsumman (SHA256) stämmer inte med den testade versionen (väntade $($Expected.Substring(0, 16))..., fick $($actual.Substring(0, 16))...). Filen kan vara ändrad eller skadad." 'Kör om scriptet för att hämta filen igen. Upprepas felet: kontakta den som gav dig scriptet. Först efter egen kontroll kan -AllowUnverified användas.'
+}
+
+# Mappväljare (dialogruta). Ger $null om den inte kan visas eller om användaren avbryter.
+function Show-FolderDialog {
+    try {
+        Add-Type -AssemblyName System.Windows.Forms
+        $d = New-Object System.Windows.Forms.FolderBrowserDialog
+        $d.Description = 'Välj en mapp. En undermapp "rapportkit" skapas där för resultatet.'
+        $d.ShowNewFolderButton = $true
+        if ($d.ShowDialog() -eq [System.Windows.Forms.DialogResult]::OK) { return (Join-Path $d.SelectedPath 'rapportkit') }
+    }
+    catch { Write-Warn2 'Mappväljaren kunde inte öppnas. Skriv sökvägen istället.' }
+    return $null
+}
+
+# Varningar för en vald resultatmapp: OneDrive (synkas till molnet), mappar som Windows skyddar mot skrivning
+# (Kontrollerad mappåtkomst) och för långa sökvägar (gräns 260 tecken).
+function Get-OutputRootWarnings([string]$Path) {
+    $w = [System.Collections.Generic.List[string]]::new()
+    $full = try { [IO.Path]::GetFullPath($Path) } catch { $Path }
+    foreach ($e in 'OneDrive', 'OneDriveCommercial', 'OneDriveConsumer') {
+        $v = [Environment]::GetEnvironmentVariable($e)
+        if ($v -and $full -like "$v*") { $w.Add('Mappen ligger i OneDrive: resultatet (som är konfidentiellt) synkas då till molnet.'); break }
+    }
+    foreach ($sf in 'MyDocuments', 'Desktop', 'MyPictures', 'MyVideos', 'MyMusic') {
+        $p = try { [Environment]::GetFolderPath($sf) } catch { $null }
+        if ($p -and $full -like "$p*") { $w.Add("Mappen ligger under $sf, som Windows kan skydda mot skrivning från okända program (Kontrollerad mappåtkomst)."); break }
+    }
+    if ($full.Length -gt 90) { $w.Add('Sökvägen är lång. Verktygens filnamn blir långa och Windows har en gräns på 260 tecken.') }
+    , $w
+}
+
+# Frågar var resultatet ska sparas. Anges -OutputRoot (eller kan frågan inte ställas) används den/standardmappen.
+function Select-OutputRoot([string]$Given) {
+    if ($Given) { return $Given }
+    $profileDir = Join-Path $env:USERPROFILE 'rapportkit'
+    if ($Yes -or [Console]::IsInputRedirected) { Write-Action "Resultatmapp (standard): $profileDir"; return $profileDir }
+    Write-Host ''
+    Write-Host '  Var ska resultatet sparas?' -ForegroundColor White
+    Write-Host '  Det innehåller konfidentiell information om miljön. Verktygen hämtas också dit.' -ForegroundColor DarkGray
+    Write-Host ''
+    Write-Host ("    [1] {0}   (rekommenderas)" -f $profileDir)
+    Write-Host '    [2] C:\rapportkit'
+    Write-Host '    [3] Annan mapp: skriv sökvägen här, eller [B] för att bläddra'
+    Write-Host ''
+    while ($true) {
+        try { $a = Read-Host '  Välj [Enter = 1]' } catch { return $profileDir }
+        $a = ("$a").Trim([char]0xFEFF).Trim().Trim('"')
+        if (-not $a -or $a -eq '1') { $p = $profileDir }
+        elseif ($a -eq '2') { $p = 'C:\rapportkit' }
+        elseif ($a -match '^[bB]$') { $p = Show-FolderDialog; if (-not $p) { continue } }
+        elseif ($a -eq '3') { Write-Host '  Skriv sökvägen (t.ex. D:\rapportkit) eller B för att bläddra.'; continue }
+        else { $p = [Environment]::ExpandEnvironmentVariables($a) }
+        if (-not [IO.Path]::IsPathRooted($p)) { Write-Warn2 'Ange en fullständig sökväg (t.ex. D:\rapportkit).'; continue }
+        $warn = Get-OutputRootWarnings $p
+        if ($warn.Count) {
+            foreach ($x in $warn) { Write-Warn2 $x }
+            if (-not (Read-YesNo "Använda $p ändå?" $false)) { continue }
+        }
+        return $p
+    }
+}
+
+# Loggar ut från de sessioner scriptet själv skapade (en inloggning som fanns innan rörs inte), om inte -KeepLogin är satt.
+# På en kunds dator ska inga tokens ligga kvar efter körningen.
+function Invoke-SessionCleanup {
+    $targets = [System.Collections.Generic.List[string]]::new()
+    if ($azReady -and -not $azWasLoggedIn) { $targets.Add('Azure CLI') }
+    if ($azPsByUs) { $targets.Add('Azure PowerShell') }
+    if ($graphByUs) { $targets.Add('Microsoft Graph') }
+    if (-not $targets.Count) { return }
+    $list = $targets -join ', '
+    if ($KeepLogin) { Write-Action "Inloggningarna ($list) lämnas kvar (-KeepLogin)."; return }
+    Write-Host ''
+    if (-not (Read-YesNo "Logga ut från $list, som scriptet loggade in? (rekommenderas på en kunds dator)" $true)) { Write-Action "Inloggningarna ($list) lämnas kvar."; return }
+    if ($targets -contains 'Azure CLI') { try { az logout 2>$null | Out-Null; Write-Ok 'Utloggad från Azure CLI' } catch { Write-Warn2 'Kunde inte logga ut från Azure CLI (kör az logout).' } }
+    if ($targets -contains 'Azure PowerShell') { try { Disconnect-AzAccount -ErrorAction Stop | Out-Null; Write-Ok 'Utloggad från Azure PowerShell' } catch { Write-Warn2 'Kunde inte logga ut från Azure PowerShell (kör Disconnect-AzAccount).' } }
+    if ($targets -contains 'Microsoft Graph') { try { Disconnect-MgGraph -ErrorAction Stop | Out-Null; Write-Ok 'Utloggad från Microsoft Graph' } catch { Write-Warn2 'Kunde inte logga ut från Microsoft Graph (kör Disconnect-MgGraph).' } }
+}
+
+# Version av en installerad modul (högsta), eller $null.
+function Get-ModuleVersionText([string]$Name) {
+    $m = Get-Module -ListAvailable -Name $Name | Sort-Object Version -Descending | Select-Object -First 1
+    if ($m) { $m.Version.ToString() } else { $null }
+}
+
+# Maskinläsbar sammanfattning av körningen (run-summary.json i resultatmappen): bevis på vad som kördes, med vilka
+# versioner, hur lång tid det tog och hur det gick.
+function Write-RunSummary([int]$Code) {
+    if (-not $RunDir -or -not (Test-Path $RunDir)) { return }
+    $end = Get-Date
+    $obj = [ordered]@{
+        kitVersion      = $KitVersion
+        startedAt       = $script:RunStart.ToString('s')
+        finishedAt      = $end.ToString('s')
+        durationSeconds = [math]::Round(($end - $script:RunStart).TotalSeconds, 1)
+        exitCode        = $Code
+        tenantId        = $TenantId
+        period          = $Period
+        options         = [ordered]@{ hidePersonalData = [bool]$HidePersonalData; latestTools = [bool]$LatestTools; offline = [bool]$Offline; skipGovViz = [bool]$SkipGovViz; skipAzqr = [bool]$SkipAzqr; skipMaester = [bool]$SkipMaester; skipPortal = [bool]$SkipPortal; managementGroupId = $ManagementGroupId; maxPortalSubscriptions = $MaxPortalSubscriptions }
+        environment     = [ordered]@{ os = [Environment]::OSVersion.VersionString; powershell = $PSVersionTable.PSVersion.ToString(); computer = $env:COMPUTERNAME }
+        tools           = [ordered]@{ governanceVisualizer = $GvVersion; azqrPinned = $Pins.Azqr; azAccounts = (Get-ModuleVersionText 'Az.Accounts'); maester = (Get-ModuleVersionText 'Maester'); pester = (Get-ModuleVersionText 'Pester') }
+        results         = @($Status.Keys | ForEach-Object { [ordered]@{ name = $_; state = $Status[$_].State; note = $Status[$_].Note } })
+        steps           = @($script:StepLog.Keys | ForEach-Object { [ordered]@{ step = [int]$_; title = $script:StepLog[$_].Title; seconds = $script:StepLog[$_].Seconds } })
+        warnings        = @($Warnings)
+    }
+    try { $obj | ConvertTo-Json -Depth 6 | Set-Content -Path (Join-Path $RunDir 'run-summary.json') -Encoding utf8 } catch { }
+}
+
 # Är filen en hel zip som innehåller (minst) en post som matchar $MustContain?
 function Test-Zip([string]$Path, [string]$MustContain) {
     try {
@@ -351,12 +694,14 @@ function Get-Download([string]$Url, [string]$Dest, [long]$MinBytes = 1024) {
 
 # Installerar ett program med winget och kontrollerar sedan att kommandot faktiskt finns.
 # (winget-slutkoder är otydliga, så vi litar på kontrollen av att programmet gick att hitta.)
-function Install-WithWinget([string]$Name, [string]$Id, [string]$Command, [string]$ManualUrl) {
+function Install-WithWinget([string]$Name, [string]$Id, [string]$Command, [string]$ManualUrl, [string]$Version) {
     if (-not (Test-Cmd winget)) {
         Fail "$Name saknas och winget finns inte, så det kan inte installeras automatiskt." "Installera $Name manuellt ($ManualUrl), öppna ett NYTT PowerShell-fönster och kör om scriptet."
     }
-    Write-Action "winget install $Id  (kan öppna ett godkännande-fönster: välj Ja)"
-    winget install --id $Id --exact --source winget --silent --accept-package-agreements --accept-source-agreements | Out-Host
+    $wa = @('install', '--id', $Id, '--exact', '--source', 'winget', '--silent', '--accept-package-agreements', '--accept-source-agreements')
+    if ($Version) { $wa += @('--version', $Version) }
+    Write-Action "winget $($wa -join ' ')  (kan öppna ett godkännande-fönster: välj Ja)"
+    winget @wa | Out-Host
     Update-SessionPath
     if (-not (Test-Cmd $Command)) {
         Fail "$Name installerades inte (winget slutkod $LASTEXITCODE)." "Installera $Name manuellt ($ManualUrl), öppna ett NYTT PowerShell-fönster och kör om scriptet."
@@ -366,31 +711,35 @@ function Install-WithWinget([string]$Name, [string]$Id, [string]$Command, [strin
 
 # Hämtar en PowerShell-modul till vår egen modulmapp ($ModDir) och kontrollerar att den går att hitta.
 # Egen mapp används för att undvika problem när Dokument är omdirigerat till OneDrive.
-# $Version = exakt version. $MinVersion/$MaxVersion = tillåtet intervall (max räknas som "lägre än" för PSResourceGet).
+# $MinVersion/$MaxVersion = godkänt intervall för redan installerade versioner (max räknas som "lägre än"). Finns ingen
+# godkänd version hämtas $Pin (den testade versionen), eller senaste inom intervallet om $Pin saknas (-LatestTools).
 # Versionen kontrolleras: Windows har t.ex. en inbyggd Pester 3.4 som inte duger åt Maester (kräver 5.5+).
-function Install-PsModule([string]$Name, [string]$Version, [string]$MinVersion, [string]$MaxVersion) {
+function Install-PsModule([string]$Name, [string]$Pin, [string]$MinVersion, [string]$MaxVersion) {
     $have = @(Get-Module -ListAvailable -Name $Name)
     if ($MinVersion) { $have = @($have | Where-Object { $_.Version -ge [version]$MinVersion }) }
+    if ($MaxVersion) { $have = @($have | Where-Object { $_.Version -lt [version]$MaxVersion }) }
     if ($have.Count) { Write-Ok "Modul $Name finns redan (version $($have[0].Version))"; return }
     if (Test-Path "$ToolsDir\modules\$Name") {            # offline-bundle
         Write-Action "Kopierar modul $Name från tools\modules"
         Copy-Item "$ToolsDir\modules\$Name" $ModDir -Recurse -Force
     }
     elseif (-not $Offline) {
-        Write-Action "Hämtar modul $Name $Version från PowerShell Gallery"
+        Write-Action "Hämtar modul $Name $Pin från PowerShell Gallery"
         try {
             if (Get-Command Save-PSResource -ErrorAction SilentlyContinue) {
                 $p = @{ Name = $Name; Path = $ModDir; TrustRepository = $true; Quiet = $true }
-                if ($Version) { $p.Version = $Version }
+                if ($Pin) { $p.Version = $Pin }
                 elseif ($MinVersion) { $p.Version = if ($MaxVersion) { "[$MinVersion,$MaxVersion)" } else { "[$MinVersion,)" } }
                 Save-PSResource @p
             }
             else {
                 Install-PackageProvider NuGet -Scope CurrentUser -Force | Out-Null
                 $p = @{ Name = $Name; Path = $ModDir; Force = $true }
-                if ($Version) { $p.RequiredVersion = $Version }
-                if ($MinVersion) { $p.MinimumVersion = $MinVersion }
-                if ($MaxVersion) { $p.MaximumVersion = $MaxVersion }
+                if ($Pin) { $p.RequiredVersion = $Pin }
+                else {
+                    if ($MinVersion) { $p.MinimumVersion = $MinVersion }
+                    if ($MaxVersion) { $p.MaximumVersion = $MaxVersion }
+                }
                 Save-Module @p
             }
         }
@@ -400,9 +749,8 @@ function Install-PsModule([string]$Name, [string]$Version, [string]$MinVersion, 
     $have = @(Get-Module -ListAvailable -Name $Name)
     if ($MinVersion) { $have = @($have | Where-Object { $_.Version -ge [version]$MinVersion }) }
     if (-not $have.Count) { Fail "Modulen $Name hämtades men gick inte att hitta i $ModDir." 'Radera mappen och kör om scriptet.' }
-    Write-Ok "Modul $Name klar"
+    Write-Ok "Modul $Name klar (version $($have[0].Version))"
 }
-
 # Läser en CSV-fil och kontrollerar att förväntade kolumner finns. Ger $null (och en varning) om
 # filen inte går att läsa eller har ett oväntat format, så att resten av rapporten ändå kan byggas.
 function Import-CsvChecked([string]$Path, [string[]]$Required, [string]$Delimiter = ',') {
@@ -466,7 +814,8 @@ try {
     # =======================================================================
     # STEG 1: Förberedelser
     # =======================================================================
-    Write-Step 1 'Förberedelser' 'Tenant-ID, mappar, loggfil och förkontroller. Tar några sekunder.'
+    Write-Banner
+    Write-Step 1 'Förberedelser' 'Tenant-ID, var resultatet sparas och loggfil. Tar några sekunder.'
     Update-SessionPath
 
     # Tenant-ID: använd parametern, annars föreslå det Azure CLI redan är inloggat mot. Förslaget kommer
@@ -489,6 +838,10 @@ try {
     $BoundParams['TenantId'] = $TenantId        # så att "kör om"-kommandot inte frågar igen
     Write-Ok "Tenant: $TenantId"
 
+    # Var ska resultatet ligga? Anges inte -OutputRoot frågar vi (med varning för OneDrive och skyddade mappar).
+    $OutputRoot = Select-OutputRoot $OutputRoot
+    $BoundParams['OutputRoot'] = $OutputRoot        # så att "kör om"-kommandot använder samma mapp
+
     # Resultatmappar: en per verktyg under <OutputRoot>\<Period>\, plus en egen modulmapp.
     $RunDir = Join-Path $OutputRoot $Period
     $ModDir = Join-Path $OutputRoot '_modules'
@@ -508,10 +861,16 @@ try {
     if ($env:PSModulePath -notlike "*$ModDir*") { $env:PSModulePath = "$ModDir;$env:PSModulePath" }
     Write-Ok "Resultatmapp: $RunDir"
 
-    # Logga allt som skrivs i fönstret till en fil (bra att skicka med vid felsökning).
-    try { Start-Transcript -Path (Join-Path $RunDir 'rapportkit.log') -Append | Out-Null; $TranscriptStarted = $true } catch { Write-Warn2 'Kunde inte starta loggfil (fortsätter ändå).' }
+    # Loggar: en rensad logg (rapportkit.log) och hela konsolutskriften inklusive verktygens text (rapportkit-console.log).
+    Initialize-Log $RunDir
+    try { Start-Transcript -Path (Join-Path $RunDir 'rapportkit-console.log') -Append | Out-Null; $TranscriptStarted = $true } catch { Write-Warn2 'Kunde inte starta konsolloggen (fortsätter ändå).' }
+    Write-Host ''
+    Write-KeyValue 'Tenant' $TenantId
+    Write-KeyValue 'Period' $Period
+    Write-KeyValue 'Resultat' $RunDir
+    Write-KeyValue 'Loggar' 'rapportkit.log (rensad), rapportkit-console.log (allt), run-summary.json'
 
-    if ($ReportOnly) { Write-Host "`n  -ReportOnly: hoppar över steg 2-9 och bygger bara rapporten." -ForegroundColor DarkCyan }
+    if ($ReportOnly) { Write-Action '-ReportOnly: hoppar över steg 2-9 och bygger bara rapporten.' }
     else {
 
         # ===================================================================
@@ -528,7 +887,7 @@ try {
         # Azure CLI behövs alltid: inloggning, rollkontroll, azqr och Defender/kostnadsdata.
         if (-not (Test-Cmd az)) { $need.Add('Azure CLI (winget)'); $wingetNeeded = $true }
         if (-not $SkipAzqr) {
-            if (-not (Test-Cmd azqr) -and -not (Test-Path (Join-Path $env:LOCALAPPDATA 'azqr\azqr.exe'))) { $need.Add('azqr (winget/GitHub)'); $wingetNeeded = $true }
+            if (-not (Test-Cmd azqr) -and -not (Get-ChildItem (Join-Path $env:LOCALAPPDATA 'azqr') -Recurse -Filter 'azqr.exe' -ErrorAction SilentlyContinue)) { $need.Add('azqr (winget/GitHub)'); $wingetNeeded = $true }
         }
         if (-not $SkipGovViz) {
             if (-not (Test-Path (Join-Path $GvDir 'pwsh\AzGovVizParallel.ps1'))) { $need.Add("Governance Visualizer $GvVersion (GitHub)") }
@@ -584,10 +943,7 @@ try {
         if ($gpoPolicy.Count) { Add-Check 'INFO' 'Körpolicy (grupprincip)' ("styrs av grupprincip: " + (($gpoPolicy | ForEach-Object { "$($_.Scope)=$($_.ExecutionPolicy)" }) -join ', ') + ". -ExecutionPolicy Bypass gäller inte då; fungerar det här steget går scriptet att köra.") }
         Add-Check 'INFO' 'Behörigheter i Azure' 'kontrolleras direkt efter inloggningen i steg 3 (Reader, Security Reader, Cost Management Reader, Global Reader); saknas något får du välja att avsluta'
 
-        foreach ($c in $checks) {
-            $color = switch ($c.State) { 'OK' { 'Green' } 'INFO' { 'Cyan' } 'VARNING' { 'Yellow' } default { 'Red' } }
-            Write-Host ("  [{0,-7}] {1}: {2}" -f $c.State, $c.Name, $c.Detail) -ForegroundColor $color
-        }
+        foreach ($c in $checks) { Write-Check $c.State $c.Name $c.Detail }
         $problems = @($checks | Where-Object { $_.State -in 'SAKNAS', 'VARNING' })
         if ($problems.Count) {
             Write-Host ''
@@ -610,6 +966,7 @@ try {
             else { Install-WithWinget 'Azure CLI' 'Microsoft.AzureCLI' 'az' 'https://aka.ms/installazurecliwindows' }
 
             $cur = az account show --query tenantId -o tsv 2>$null
+            $azWasLoggedIn = ($cur -eq $TenantId)        # fanns inloggningen redan? Då loggar vi inte ut den i slutet.
             if ($cur -eq $TenantId) { Write-Ok 'Azure CLI är redan inloggad mot rätt tenant' }
             else {
                 Write-Todo 'Logga in i webbläsarfönstret som öppnas (Azure CLI)...'
@@ -644,15 +1001,12 @@ try {
         if ($azReady) {
             Write-Action 'Kontrollerar kontots roller'
             $roleChecks = @(Get-RoleChecks -Tenant $TenantId -NeedGovViz (-not $SkipGovViz) -NeedPortal (-not $SkipPortal) -NeedMaester (-not $SkipMaester))
-            foreach ($c in $roleChecks) {
-                $color = switch ($c.State) { 'OK' { 'Green' } 'INFO' { 'Cyan' } 'VARNING' { 'Yellow' } default { 'Red' } }
-                Write-Host ("  [{0,-7}] {1}: {2}" -f $c.State, $c.Role, $c.Detail) -ForegroundColor $color
-            }
+            foreach ($c in $roleChecks) { Write-Check $c.State $c.Role $c.Detail }
             $missingRoles = @($roleChecks | Where-Object { $_.State -eq 'SAKNAS' })
             if ($missingRoles.Count) {
                 Write-Host ''
-                Write-Host '  Så här lägger du till de roller som saknas (görs av en Global Administrator):' -ForegroundColor Yellow
-                foreach ($line in (Get-RoleInstructions $missingRoles)) { Write-Host "    $line" -ForegroundColor White }
+                Write-Line 'ÅTGÄRD' 'Yellow' 'Så här lägger du till de roller som saknas (görs av en Global Administrator):' 'Yellow'
+                foreach ($line in (Get-RoleInstructions $missingRoles)) { Write-Host "             $line" -ForegroundColor White; Write-Log 'ÅTGÄRD' $line }
                 Write-Host ''
                 if (-not (Confirm-Continue "$($missingRoles.Count) roll(er) saknas. Fortsätta ändå (delar av körningen kan misslyckas)?")) {
                     Fail 'Avbrutet: roller som behövs saknas.' 'Lägg till rollerna enligt instruktionen ovan (logga ut och in efteråt) och kör om scriptet.'
@@ -667,39 +1021,50 @@ try {
         # ===================================================================
         Write-Step 4 'Hämtar och installerar beroenden' 'Bara det som saknas på den här datorn. Första gången tar det 5-10 minuter.'
         if ($NoInstall) { Write-Warn2 '-NoInstall: hoppar över all hämtning och installation.' }
+        if ($LatestTools) { Write-Warn2 '-LatestTools: senaste versioner används och kontrollsummor hoppas över. Resultatet är inte testat med dessa.' }
+        else { Write-Action ("Testade versioner: azqr {0}, Governance Visualizer {1}, Maester {2}, Pester {3}, Az.Accounts {4}" -f $Pins.Azqr, $GvVersion, $Pins.Maester, $Pins.Pester, $Pins.AzAccounts) }
 
         # (Azure CLI installerades redan i steg 3.)
 
-        # azqr: först winget, annars hämtas senaste releasen direkt från GitHub (och zipen verifieras).
+        # azqr: först winget (fast version; winget kontrollerar själv installationsfilens hash), annars hämtas samma version
+        # som zip direkt från GitHub och kontrolleras mot den testade kontrollsumman. Zippen packar upp azqr.exe i en
+        # undermapp (bin\windows_amd64), så vi letar upp den där.
         if (-not $SkipAzqr) {
             try {
                 $azqrDir = Join-Path $env:LOCALAPPDATA 'azqr'
-                if (Test-Path "$azqrDir\azqr.exe") { if ($env:Path -notlike "*$azqrDir*") { $env:Path += ";$azqrDir" } }
+                $azqrExe = Get-ChildItem $azqrDir -Recurse -Filter 'azqr.exe' -ErrorAction SilentlyContinue | Select-Object -First 1
+                if ($azqrExe -and $env:Path -notlike "*$($azqrExe.DirectoryName)*") { $env:Path += ";$($azqrExe.DirectoryName)" }
                 if (Test-Cmd azqr) { Write-Ok 'azqr finns redan' }
                 elseif ($NoInstall) { Fail 'azqr saknas (-NoInstall är satt).' 'Installera azqr (winget install azqr) och kör om.' }
                 else {
-                    try { Install-WithWinget 'azqr' 'Microsoft.Azure.QuickReview' 'azqr' 'https://github.com/Azure/azqr/releases' }
+                    try { Install-WithWinget 'azqr' 'Microsoft.Azure.QuickReview' 'azqr' 'https://github.com/Azure/azqr/releases' $Pins.Azqr }
                     catch {
                         Write-Warn2 "winget gav inget resultat ($($_.Exception.Message)). Hämtar azqr direkt från GitHub."
                         $zip = Join-Path $env:TEMP 'azqr.zip'
                         if (Test-Path "$ToolsDir\azqr.zip") { Copy-Item "$ToolsDir\azqr.zip" $zip -Force }
                         else {
-                            $rel = Invoke-RestMethod 'https://api.github.com/repos/Azure/azqr/releases/latest' -Headers @{ 'User-Agent' = 'azure-rapportkit' }
-                            $asset = $rel.assets | Where-Object name -like 'azqr-win-amd64.zip' | Select-Object -First 1
-                            if (-not $asset) { Fail 'Hittade ingen Windows-zip i senaste azqr-releasen.' 'Hämta azqr manuellt från https://github.com/Azure/azqr/releases och kör om.' }
-                            Get-Download $asset.browser_download_url $zip 1MB
+                            $azqrUrl = $AzqrZipUrl
+                            if ($LatestTools) {
+                                $rel = Invoke-RestMethod 'https://api.github.com/repos/Azure/azqr/releases/latest' -Headers @{ 'User-Agent' = 'azure-rapportkit' }
+                                $asset = $rel.assets | Where-Object name -like 'azqr-win-amd64.zip' | Select-Object -First 1
+                                if (-not $asset) { Fail 'Hittade ingen Windows-zip i senaste azqr-releasen.' 'Hämta azqr manuellt från https://github.com/Azure/azqr/releases och kör om.' }
+                                $azqrUrl = $asset.browser_download_url
+                            }
+                            Get-Download $azqrUrl $zip 1MB
                         }
-                        if (-not (Test-Zip $zip '*azqr*.exe')) { Fail 'Den nedladdade azqr-filen är skadad eller innehåller inte azqr.exe.' 'Kör om scriptet för att hämta den igen.' }
+                        Assert-FileHash $zip $Pins.AzqrSha256 'azqr'
+                        if (-not (Test-Zip $zip '*azqr.exe')) { Fail 'Den nedladdade azqr-filen är skadad eller innehåller inte azqr.exe.' 'Kör om scriptet för att hämta den igen.' }
                         Expand-Archive $zip $azqrDir -Force
-                        $env:Path += ";$azqrDir"
-                        if (-not (Test-Cmd azqr)) { Fail 'azqr packades upp men kommandot hittas inte.' "Kontrollera att $azqrDir\azqr.exe finns, eller installera azqr manuellt, och kör om." }
-                        Write-Ok "azqr hämtad till $azqrDir"
+                        $azqrExe = Get-ChildItem $azqrDir -Recurse -Filter 'azqr.exe' | Select-Object -First 1
+                        if (-not $azqrExe) { Fail 'azqr packades upp men azqr.exe hittades inte.' "Kontrollera mappen $azqrDir, eller installera azqr manuellt, och kör om." }
+                        $env:Path += ";$($azqrExe.DirectoryName)"
+                        if (-not (Test-Cmd azqr)) { Fail 'azqr packades upp men kommandot hittas inte.' "Kontrollera att $($azqrExe.FullName) går att starta, eller installera azqr manuellt, och kör om." }
+                        Write-Ok "azqr hämtad till $($azqrExe.DirectoryName)"
                     }
                 }
             }
             catch { Set-Status 'azqr' 'Fel' (Get-ErrorText $_); Write-Warn2 (Get-ErrorText $_); $SkipAzqr = $true }
         }
-
         # Azure Governance Visualizer: ett PowerShell-script i en GitHub-repo. Vi hämtar en fast version
         # som zip (kräver inte git), kontrollerar zipen och att huvudscriptet finns efter uppackning.
         if (-not $SkipGovViz) {
@@ -711,6 +1076,7 @@ try {
                     $zip = Join-Path $env:TEMP "azgovviz-$GvVersion.zip"
                     if (Test-Path "$ToolsDir\AzGovViz.zip") { Copy-Item "$ToolsDir\AzGovViz.zip" $zip -Force }
                     else { Get-Download $GvUrl $zip 100KB }
+                    Assert-FileHash $zip $Pins.GovVizSha256 'Governance Visualizer'
                     if (-not (Test-Zip $zip '*pwsh/AzGovVizParallel.ps1')) { Fail 'Den nedladdade Governance Visualizer-filen är skadad eller ofullständig.' 'Kör om scriptet för att hämta den igen.' }
                     $tmp = Join-Path $OutputRoot '_gv_tmp'
                     if (Test-Path $tmp) { Remove-Item $tmp -Recurse -Force }
@@ -723,8 +1089,8 @@ try {
                     Write-Ok "Governance Visualizer $GvVersion hämtad till $GvDir"
                 }
                 # Az.Accounts = inloggning för Az PowerShell. AzAPICall = hjälpmodul som AzGovViz kräver (exakt version).
-                Install-PsModule 'Az.Accounts'
-                Install-PsModule 'AzAPICall' '1.4.1'
+                Install-PsModule 'Az.Accounts' -Pin $Pins.AzAccounts -MinVersion $Pins.AzAccounts
+                Install-PsModule 'AzAPICall' -Pin $Pins.AzApiCall -MinVersion '1.2.4'
             }
             catch { Set-Status 'Governance Visualizer' 'Fel' (Get-ErrorText $_); Write-Warn2 (Get-ErrorText $_); $SkipGovViz = $true }
         }
@@ -734,8 +1100,8 @@ try {
             try {
                 if ($NoInstall -and -not (Get-Module -ListAvailable -Name Maester)) { Fail 'Maester saknas (-NoInstall är satt).' 'Kör om utan -NoInstall.' }
                 # Maester kräver Pester 5.5 eller nyare. Pester 6 hålls utanför eftersom Maester är testad mot 5.x.
-                Install-PsModule 'Pester' -MinVersion '5.5.0' -MaxVersion '6.0.0'
-                Install-PsModule 'Maester'
+                Install-PsModule 'Pester' -Pin $Pins.Pester -MinVersion '5.5.0' -MaxVersion '6.0.0'
+                Install-PsModule 'Maester' -Pin $Pins.Maester -MinVersion $Pins.Maester
             }
             catch { Set-Status 'Maester' 'Fel' (Get-ErrorText $_); Write-Warn2 (Get-ErrorText $_); $SkipMaester = $true }
         }
@@ -762,6 +1128,7 @@ try {
                 if ($ctx -and $ctx.Tenant.Id -eq $TenantId -and $ctx.Account.Type -ne 'AccessToken') { Write-Ok 'Az PowerShell är redan inloggad' }
                 else {
                     Write-Todo 'Logga in igen (Az PowerShell)...'
+                    $azPsByUs = $true
                     if ($DeviceLogin) { Connect-AzAccount -TenantId $TenantId -UseDeviceAuthentication | Out-Null }
                     else              { Connect-AzAccount -TenantId $TenantId | Out-Null }
                 }
@@ -778,7 +1145,7 @@ try {
             try { $ans = Read-Host '  Logga in till Microsoft Graph för Maester nu? (j/N)' } catch { $ans = 'n' }
             if ($ans -notmatch '^[jJyY]') { $SkipMaester = $true; Set-Status 'Maester' 'Hoppad över' 'Valdes bort vid inloggningsfrågan. Kör om och svara j, eller använd -SkipMaester.' }
             else {
-                try { Connect-Maester -TenantId $TenantId | Out-Null; Write-Ok 'Microsoft Graph inloggad' }
+                try { Connect-Maester -TenantId $TenantId | Out-Null; $graphByUs = $true; Write-Ok 'Microsoft Graph inloggad' }
                 catch {
                     $SkipMaester = $true
                     Set-Status 'Maester' 'Fel' ("Graph-inloggning misslyckades: $($_.Exception.Message) En Global Administrator behöver ge admin consent för 'Microsoft Graph Command Line Tools'. Kör sedan om scriptet." + (Get-SignInHelp $_.Exception.Message))
@@ -853,6 +1220,8 @@ try {
                 # PIM-behörighetsrapportering kräver ett servicekonto och kan inte köras som vanlig användare.
                 # Utan flaggan pausar verktyget och väntar på tangenttryckning, så vi stänger av det direkt.
                 $gvArgs.NoPIMEligibility = $true
+                # -HidePersonalData: verktyget döljer namn och e-postadresser i rolltilldelningarna i sin rapport.
+                if ($HidePersonalData) { $gvArgs.DoNotShowRoleAssignmentsUserData = $true; Write-Action 'Användardata döljs i Governance Visualizers rapport (-HidePersonalData).' }
                 # Utskriften sparas också i $gvLines så att den verkliga orsaken kan plockas fram vid fel.
                 $gvLines = [System.Collections.Generic.List[string]]::new()
                 & $gvScript @gvArgs *>&1 | ForEach-Object { $gvLines.Add("$_"); $_ } | Out-Host
@@ -981,6 +1350,7 @@ try {
                 $scoreRows = [System.Collections.Generic.List[object]]::new()
                 $recRows = [System.Collections.Generic.List[object]]::new()
                 $costRows = [System.Collections.Generic.List[object]]::new()
+                $ctrlRows = [System.Collections.Generic.List[object]]::new()
                 foreach ($s in $subs) {
                     $sid = $s.id; $sname = $s.name; $subNo++
                     Write-Action "Prenumeration $subNo/$($subs.Count): $sname"
@@ -1000,6 +1370,15 @@ try {
                         $portalOk++
                     }
                     catch { $portalErrors.Add("Secure Score ($sname): $($_.Exception.Message)") }
+
+                    # Secure Score per kontroll (poäng, antal osunda/friska resurser). Behövs eftersom Azures lista över
+                    # enskilda rekommendationer kan vara ofullständig: kontrollerna visar hur många resurser som är osunda.
+                    try {
+                        $r = Invoke-ArmRest 'GET' "https://management.azure.com/subscriptions/$sid/providers/Microsoft.Security/secureScoreControls?api-version=2020-01-01"
+                        foreach ($c in @($r.value)) { $ctrlRows.Add([pscustomobject]@{ Prenumeration = $sname; Kontroll = $c.properties.displayName; Poang = $c.properties.score.current; Max = $c.properties.score.max; Osunda = [int]$c.properties.unhealthyResourceCount; Friska = [int]$c.properties.healthyResourceCount }) }
+                        $portalOk++
+                    }
+                    catch { $portalErrors.Add("Secure Score-kontroller ($sname): $($_.Exception.Message)") }
 
                     # Defender-rekommendationer (sidindelat; högst 30 sidor, och vi stannar om nextLink upprepas)
                     try {
@@ -1043,10 +1422,14 @@ try {
                 }
 
                 # Spara som CSV (UTF-8 med BOM så att Excel visar å/ä/ö rätt)
-                $save = @(@('defender-planer.csv', $planRows), @('secure-score.csv', $scoreRows), @('defender-rekommendationer.csv', $recRows), @('kostnad.csv', $costRows))
+                $save = @(@('defender-planer.csv', $planRows), @('secure-score.csv', $scoreRows), @('secure-score-kontroller.csv', $ctrlRows), @('defender-rekommendationer.csv', $recRows), @('kostnad.csv', $costRows))
                 foreach ($sv in $save) {
                     if ($sv[1].Count) { $sv[1] | Export-Csv -Path (Join-Path $Dirs.portal $sv[0]) -NoTypeInformation -Encoding utf8BOM; Write-Ok "$($sv[0]): $($sv[1].Count) rader" }
                 }
+                # Stämmer rekommendationslistan med kontrollerna? Annars har Azures lista (en egenhet i API:et) tappat osunda resurser.
+                $ctrlUnhealthy = [int](($ctrlRows | Measure-Object -Property Osunda -Sum).Sum)
+                $recUnhealthy = @($recRows | Where-Object { $_.Status -eq 'Unhealthy' }).Count
+                if ($ctrlUnhealthy -gt $recUnhealthy) { Add-Warning "Secure Score-kontrollerna visar $ctrlUnhealthy osunda resurser, men rekommendationslistan innehåller bara $recUnhealthy. Azures lista är troligen ofullständig; använd tabellen Secure Score per kontroll." }
                 if ($portalErrors.Count -eq 0) { Set-Status 'Defender och kostnad' 'OK' "Sparat i $($Dirs.portal)" }
                 else {
                     foreach ($e in $portalErrors) { Write-Warn2 $e }
@@ -1264,6 +1647,16 @@ try {
                 $planView = $plans | ForEach-Object { [pscustomobject]@{ Prenumeration = $_.Prenumeration; Plan = $_.Plan; Status = $(if ($_.Niva -eq 'Standard') { 'På' } else { 'Av' }) } }
                 [void]$body.Append('<h3>Defender-planer</h3>' + (ConvertTo-HtmlTable $planView @(@{Name='Prenumeration';Label='Prenumeration'}, @{Name='Plan';Label='Plan'}, @{Name='Status';Label='Status'}) 40))
             }
+            # Secure Score per kontroll: poäng och antal osunda/friska resurser.
+            $ctrlF = Join-Path $Dirs.portal 'secure-score-kontroller.csv'
+            if (Test-Path $ctrlF) {
+                $ctrls = Import-CsvChecked $ctrlF @('Prenumeration', 'Kontroll', 'Poang', 'Max', 'Osunda', 'Friska')
+                if ($null -ne $ctrls -and @($ctrls).Count) {
+                    $ctrlView = @($ctrls | Where-Object { [int]$_.Max -gt 0 -or [int]$_.Osunda -gt 0 } | Sort-Object { -[int]$_.Osunda }, Kontroll | ForEach-Object {
+                            [pscustomobject]@{ Kontroll = $_.Kontroll; Poang = ('{0} av {1}' -f $_.Poang, $_.Max); Osunda = $_.Osunda; Friska = $_.Friska } })
+                    [void]$body.Append('<h3>Secure Score per kontroll</h3><p class="muted">Poäng och antal osunda respektive friska resurser per kontroll. Tabellen är mer tillförlitlig än listan över enskilda rekommendationer nedan, som Azures API ibland returnerar ofullständig.</p>' + (ConvertTo-HtmlTable $ctrlView @(@{Name='Kontroll';Label='Kontroll'}, @{Name='Poang';Label='Poäng'}, @{Name='Osunda';Label='Osunda resurser'}, @{Name='Friska';Label='Friska resurser'}) 30))
+                }
+            }
             if ($null -ne $recs -and @($recs | Where-Object Status -eq 'Unhealthy').Count) {
                 $sevOrder = @{ High = 0; Medium = 1; Low = 2 }
                 $recView = @($recs | Where-Object Status -eq 'Unhealthy' | Sort-Object { if ($sevOrder.ContainsKey($_.Allvarlighet)) { $sevOrder[$_.Allvarlighet] } else { 3 } } |
@@ -1277,6 +1670,36 @@ try {
         }
         $shots = @(Get-ChildItem $Dirs.portal -File -Filter '*.png' -ErrorAction SilentlyContinue).Count
         [void]$body.Append("<p class=`"muted`">Skärmdumpar från portalen (valfritt): $(if ($shots) { "&#10003; $shots fil(er) i portal\" } else { 'inga' }).</p>")
+    }
+
+    # --- Begränsningar och fakta om körningen -------------------------------------
+    Invoke-Section 'Begränsningar' {
+        [void]$body.Append('<h2>Begränsningar och avgränsningar</h2>')
+        $lim = [System.Collections.Generic.List[string]]::new()
+        $lim.Add('Rapporten sammanfattar verktygens resultat och ersätter inte en granskning. Den visar läget vid körningstillfället.')
+        foreach ($k in $Status.Keys) {
+            $s = $Status[$k]
+            if ($s.State -eq 'Hoppad över') { $lim.Add("$k kördes inte (hoppades över).") }
+            elseif ($s.State -eq 'Fel') { $lim.Add("$k misslyckades och saknas därför i rapporten: $($s.Note)") }
+            elseif ($s.State -eq 'Delvis') { $lim.Add("$k lyckades bara delvis: $($s.Note)") }
+        }
+        $lim.Add('Governance Visualizer körs som vanlig användare, så roller som bara är tillgängliga via PIM men inte aktiverade ingår inte (kräver servicekonto). Klassiska prenumerationsadministratörer (ett pensionerat API) och kontrollen av Azure Landing Zones-policyversioner ingår inte.')
+        $lim.Add('Defender-rekommendationer hämtas från Azures API, som kan returnera en ofullständig lista. Använd Secure Score per kontroll som referens.')
+        $lim.Add('Kostnad avser de senaste 12 månaderna per prenumeration. Prognos och kostnad per tagg ingår inte.')
+        if ($HidePersonalData) { $lim.Add('Användardata är dolda i Governance Visualizers rapport (-HidePersonalData). Övriga rapporter, bland annat Maesters, kan innehålla namn.') }
+        else { $lim.Add('Rapporterna kan innehålla namn och e-postadresser (rolltilldelningar, Maester). Hantera dem som konfidentiella.') }
+        [void]$body.Append('<ul>' + (($lim | ForEach-Object { "<li>$(Esc $_)</li>" }) -join '') + '</ul>')
+
+        $meta = @(
+            [pscustomobject]@{ Falt = 'Rapportkit'; Varde = "v$KitVersion" },
+            [pscustomobject]@{ Falt = 'Körd'; Varde = $script:RunStart.ToString('yyyy-MM-dd HH:mm') },
+            [pscustomobject]@{ Falt = 'Tenant'; Varde = $TenantId },
+            [pscustomobject]@{ Falt = 'Verktygsversioner'; Varde = $(if ($LatestTools) { 'senaste (-LatestTools), inte testade med detta kit' } else { "testade: Governance Visualizer $GvVersion, azqr $($Pins.Azqr), Maester $($Pins.Maester), Pester $($Pins.Pester), Az.Accounts $($Pins.AzAccounts)" }) },
+            [pscustomobject]@{ Falt = 'Installerat'; Varde = ("Maester {0}, Az.Accounts {1}" -f (Get-ModuleVersionText 'Maester'), (Get-ModuleVersionText 'Az.Accounts')) },
+            [pscustomobject]@{ Falt = 'Dator'; Varde = ("PowerShell {0}, {1}" -f $PSVersionTable.PSVersion, [Environment]::OSVersion.VersionString) }
+        )
+        [void]$body.Append('<h3>Om körningen</h3>' + (ConvertTo-HtmlTable $meta @(@{Name='Falt';Label='Fält'}, @{Name='Varde';Label='Värde'}) 20))
+        [void]$body.Append('<p class="muted">Scriptet skriver inget i Azure-resurser eller Entra-konfigurationen. Det installerar verktyg lokalt, skapar inloggningssessioner (som syns i tenantens loggar), och för Maester krävs att en administratör godkänner läsbehörigheter för Microsoft Graph Command Line Tools.</p>')
     }
 
     # --- Status och varningar överst i rapporten ----------------------------
@@ -1309,7 +1732,7 @@ table{border-collapse:collapse;width:100%;font-size:14px}th,td{text-align:left;p
 <!doctype html><html lang="sv"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
 <title>Rapportkit $Period</title><style>$css</style></head><body>
 <h1>Rapportkit $Period</h1>
-<p class="muted">Tenant $TenantId &middot; skapad $(Get-Date -Format 'yyyy-MM-dd HH:mm') &middot; endast läsrättigheter, inget i miljön har ändrats.</p>
+<p class="muted">Tenant $TenantId &middot; skapad $(Get-Date -Format 'yyyy-MM-dd HH:mm') &middot; Rapportkit v$KitVersion &middot; konfidentiell information</p>
 $($top.ToString())
 $($body.ToString())
 </body></html>
@@ -1319,31 +1742,46 @@ $($body.ToString())
     Write-Ok "Rapport: $reportPath"
 
     # =======================================================================
-    # Sammanfattning i konsolen
+    # Avslut: körningssammanfattning, zip för leverans, sammanfattningsruta, utloggning och städning.
     # =======================================================================
-    Write-Host ''
-    Write-Host '=== Sammanfattning ===' -ForegroundColor Cyan
-    $anyFail = $false
-    foreach ($k in $Status.Keys) {
-        $s = $Status[$k]
-        $color = switch ($s.State) { 'OK' { 'Green' } 'Fel' { 'Red' } 'Delvis' { 'Yellow' } default { 'DarkGray' } }
-        Write-Host ("  {0,-24} {1}" -f $k, $s.State) -ForegroundColor $color
-        if ($s.State -eq 'Fel') { $anyFail = $true; Write-Host "      $($s.Note)" -ForegroundColor Yellow }
-        elseif ($s.State -eq 'Delvis') { Write-Host "      $($s.Note)" -ForegroundColor Yellow }
+    Complete-Step
+    $anyFail = @($Status.Values | Where-Object { $_.State -eq 'Fel' }).Count -gt 0
+    if ($anyFail) { $ExitCode = 2 }
+    Write-RunSummary $ExitCode
+
+    # Zip av resultatmappen för leverans, med SHA256 så att mottagaren kan kontrollera att filen kommit fram oförändrad.
+    # Konsolloggen (rapportkit-console.log) tas inte med: den är en felsökningslogg och är låst medan scriptet körs.
+    $zipPath = $null; $zipHash = $null
+    if (-not $NoZip) {
+        try {
+            $zipPath = Join-Path $OutputRoot ('rapportkit_{0}_{1}.zip' -f $TenantId.Substring(0, 8), $Period)
+            if (Test-Path $zipPath) { Remove-Item $zipPath -Force }
+            Get-ChildItem -Path $RunDir -Force | Where-Object { $_.Name -ne 'rapportkit-console.log' } | Compress-Archive -DestinationPath $zipPath -Force
+            $zipHash = (Get-FileHash $zipPath -Algorithm SHA256).Hash
+            Set-Content -Path "$zipPath.sha256" -Value ('{0} *{1}' -f $zipHash, (Split-Path $zipPath -Leaf)) -Encoding ascii
+            Write-Ok ('Zip skapad ({0:N1} MB), kontrollsumma sparad i {1}.sha256' -f ((Get-Item $zipPath).Length / 1MB), (Split-Path $zipPath -Leaf))
+        }
+        catch { Add-Warning "Kunde inte skapa zip-filen: $($_.Exception.Message)"; $zipPath = $null }
     }
-    if ($anyFail) {
-        $ExitCode = 2
-        Write-Host ''
-        Write-Host '  Något verktyg misslyckades (se ovan). Rapporten visar det som gick bra.' -ForegroundColor Yellow
-        Write-Host '  Åtgärda det som står under respektive fel och kör om scriptet:' -ForegroundColor Yellow
-        Write-Host "    $(Get-RerunCommand)" -ForegroundColor White
-    }
+
+    $facts = [System.Collections.Generic.List[object]]::new()
+    $facts.Add(@('Rapport', $reportPath))
+    $facts.Add(@('Resultatmapp', $RunDir))
+    if ($zipPath) { $facts.Add(@('Zip', $zipPath)); $facts.Add(@('SHA256', $zipHash)) }
+    $facts.Add(@('Loggar', 'rapportkit.log (rensad), rapportkit-console.log (allt) och run-summary.json i resultatmappen'))
+    $facts.Add(@('Total tid', (Format-Duration ((Get-Date) - $script:RunStart).TotalSeconds)))
+    if ($anyFail) { $facts.Add(@('Kör om', (Get-RerunCommand))) }
+    Write-SummaryBox $Status $facts
+    if ($anyFail) { Write-Warn2 'Något verktyg misslyckades (se ovan). Rapporten visar det som gick bra. Åtgärda och kör om med kommandot ovan.' }
     Write-Host ''
-    Write-Host 'Nästa steg:' -ForegroundColor Cyan
-    Write-Host "  1. Öppna $reportPath och kontrollera innehållet."
-    Write-Host "  2. Lägg portalexporterna (Defender, Advisor, skärmdumpar) i $($Dirs.portal) enligt instruktionen."
-    Write-Host "  3. Zippa mappen $RunDir och lämna den på överenskommen plats (innehåller konfidentiell information)."
+    Write-Action 'Nästa steg: öppna rapporten och kontrollera innehållet. Resultatet är konfidentiellt: lämna det bara på överenskommen plats.'
+
+    Invoke-SessionCleanup
+    foreach ($tmpf in @((Join-Path $env:TEMP 'azqr.zip'), (Join-Path $env:TEMP "azgovviz-$GvVersion.zip"))) { Remove-Item $tmpf -Force -ErrorAction SilentlyContinue }
+    Remove-Item (Join-Path $env:TEMP 'azrest-*.json') -Force -ErrorAction SilentlyContinue
+
     $Completed = $true
+    Write-Log 'KLAR' "Körningen klar. Slutkod $ExitCode"
     # RAPPORTKIT_NOOPEN används vid automatiska tester så att ingen webbläsare startas.
     if (-not $env:RAPPORTKIT_NOOPEN) { try { Start-Process $reportPath } catch { } }
 }
@@ -1354,28 +1792,42 @@ catch {
     if ($ex -is [System.Management.Automation.PipelineStoppedException]) { exit 1 }
     $ExitCode = 1
     $AbortShown = $true
+    Complete-Step
     Write-Host ''
-    Write-Host '=== Körningen avbröts ===' -ForegroundColor Red
+    Write-Line 'AVBRUTEN' 'Red' 'Körningen avbröts' 'Red'
     if ($ex.Data -and $ex.Data['Fix']) {
-        Write-Host "  Orsak: $($ex.Message)" -ForegroundColor Red
-        Write-Host "  Så här går du vidare: $($ex.Data['Fix'])" -ForegroundColor Yellow
+        Write-Log 'FEL' ('Avbruten: ' + $ex.Message)
+        Write-Line 'ORSAK' 'Red' $ex.Message 'Red'
+        Write-Line 'ÅTGÄRD' 'Yellow' ([string]$ex.Data['Fix']) 'Yellow'
+        Write-Log 'ÅTGÄRD' ([string]$ex.Data['Fix'])
     }
     else {
-        Write-Host "  Oväntat fel: $($ex.Message)" -ForegroundColor Red
-        Write-Host "  Plats: $($_.InvocationInfo.ScriptLineNumber): $($_.InvocationInfo.Line.Trim())" -ForegroundColor DarkGray
-        Write-Host '  Skicka loggfilen (rapportkit.log i resultatmappen) till den som gav dig scriptet.' -ForegroundColor Yellow
+        Write-Log 'FEL' ('Oväntat fel: {0} (rad {1}: {2})' -f $ex.Message, $_.InvocationInfo.ScriptLineNumber, $_.InvocationInfo.Line.Trim())
+        Write-Line 'FEL' 'Red' "Oväntat fel: $($ex.Message)" 'Red'
+        Write-Host ('             Plats: rad {0}: {1}' -f $_.InvocationInfo.ScriptLineNumber, $_.InvocationInfo.Line.Trim()) -ForegroundColor DarkGray
+        Write-Line 'ÅTGÄRD' 'Yellow' 'Skicka rapportkit.log (och rapportkit-console.log) från resultatmappen till den som gav dig scriptet.' 'Yellow'
     }
-    Write-Host '  När det är åtgärdat, kör om scriptet. Det som redan är installerat återanvänds:' -ForegroundColor Yellow
-    Write-Host "    $(Get-RerunCommand)" -ForegroundColor White
+    Write-Line 'KÖR OM' 'Cyan' 'När det är åtgärdat, kör om scriptet (det som redan är installerat återanvänds):' 'Gray'
+    Write-Host "             $(Get-RerunCommand)" -ForegroundColor White
+    Write-RunSummary 1
 }
 finally {
-    # Körs alltid, även vid Ctrl+C eller stängt fönster: stäng loggen och förklara avbrottet.
+    # Körs alltid, även vid Ctrl+C eller stängt fönster: förklara avbrottet, städa och stäng loggen.
     if (-not $Completed -and -not $AbortShown) {
+        Complete-Step
         Write-Host ''
-        Write-Host '=== Körningen avbröts (Ctrl+C eller stängt fönster) ===' -ForegroundColor Yellow
-        Write-Host '  Inget har ändrats i Azure. Kör om scriptet; det som redan är installerat återanvänds:' -ForegroundColor Yellow
-        if ($TenantId) { Write-Host "    $(Get-RerunCommand)" -ForegroundColor White }
+        Write-Line 'AVBRUTEN' 'Yellow' 'Körningen avbröts (Ctrl+C eller stängt fönster). Inget har ändrats i Azure.' 'Yellow'
+        Write-Log 'FEL' 'Avbruten av användaren (Ctrl+C eller stängt fönster)'
+        if ($TenantId) {
+            Write-Line 'KÖR OM' 'Cyan' 'Kör om scriptet; det som redan är installerat återanvänds:' 'Gray'
+            Write-Host "             $(Get-RerunCommand)" -ForegroundColor White
+        }
+        Write-RunSummary 1
     }
+    if (-not $Completed -and ($azPsByUs -or $graphByUs -or ($azReady -and -not $azWasLoggedIn))) {
+        Write-Host '  Obs: inloggningar som scriptet skapade kan finnas kvar. Logga ut med: az logout   (samt Disconnect-AzAccount och Disconnect-MgGraph)' -ForegroundColor DarkYellow
+    }
+    foreach ($tmpf in @((Join-Path $env:TEMP 'azqr.zip'), (Join-Path $env:TEMP "azgovviz-$GvVersion.zip"))) { Remove-Item $tmpf -Force -ErrorAction SilentlyContinue }
     if ($TranscriptStarted) { try { Stop-Transcript | Out-Null } catch { } }
 }
 exit $ExitCode
