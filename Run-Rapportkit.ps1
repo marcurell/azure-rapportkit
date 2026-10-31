@@ -79,6 +79,11 @@
   Logga inte ut från de sessioner scriptet själv skapade (Azure CLI, Azure PowerShell, Microsoft Graph).
 .PARAMETER NoZip
   Skapa ingen zip-fil av resultatet.
+.PARAMETER NoEncrypt
+  Kryptera inte zip-filen (som standard krypteras den med ett lösenord som du anger i början av körningen).
+  Använd bara om resultatet inte lämnar datorn.
+.PARAMETER ZipPassword
+  Lösenord (SecureString) för zip-filen, för automatiska körningar. Utelämnas det frågar scriptet i början.
 .PARAMETER Plain
   Rita ramar och staplar med vanliga ASCII-tecken (för konsoler som visar specialtecken fel).
 .PARAMETER LatestTools
@@ -113,6 +118,8 @@ param(
     [switch]$HidePersonalData,
     [switch]$KeepLogin,
     [switch]$NoZip,
+    [switch]$NoEncrypt,
+    [System.Security.SecureString]$ZipPassword,
     [switch]$Plain,
     [switch]$LatestTools,
     [switch]$AllowUnverified,
@@ -133,6 +140,8 @@ try { [System.Net.Http.HttpClient]::DefaultProxy.Credentials = [System.Net.Crede
 # "kör om"-kommandot och för att starta om scriptet i PowerShell 7.
 $BoundParams = @{}
 foreach ($k in $PSBoundParameters.Keys) { $BoundParams[$k] = $PSBoundParameters[$k] }
+# Lösenordet ska aldrig skickas vidare på kommandoraden eller skrivas i "kör om"-kommandot.
+[void]$BoundParams.Remove('ZipPassword')
 
 $ScriptRoot = Split-Path -Parent $PSCommandPath
 $ToolsDir = Join-Path $ScriptRoot 'tools'        # används bara för offline-bundle
@@ -867,6 +876,32 @@ try {
     if ($env:PSModulePath -notlike "*$ModDir*") { $env:PSModulePath = "$ModDir;$env:PSModulePath" }
     Write-Ok "Resultatmapp: $RunDir"
 
+    # Lösenord för zip-filen: frågas direkt, innan den långa körningen, så att ett felskrivet eller för kort lösenord inte
+    # upptäcks först efteråt. Frågan sker före konsolloggen startar. Lösenordet sparas aldrig i någon fil eller logg.
+    if (-not $NoZip -and -not $NoEncrypt) {
+        . (Join-Path $ScriptRoot 'lib\Crypto.ps1')
+        if (-not $ZipPassword) {
+            Write-Host ''
+            Write-Action 'Resultatet packas i en krypterad fil. Välj ett lösenord (minst 12 tecken) och skicka det till mottagaren på ett annat sätt än filen (till exempel SMS eller telefon).'
+            for ($try = 1; $try -le 3 -and -not $ZipPassword; $try++) {
+                try {
+                    $p1 = Read-Host 'Lösenord för zip-filen' -AsSecureString
+                    $p2 = Read-Host 'Skriv lösenordet igen' -AsSecureString
+                }
+                catch { Fail 'Kan inte fråga efter lösenord i den här miljön.' 'Ange -ZipPassword (SecureString) eller, om resultatet inte lämnar datorn, -NoEncrypt.' }
+                $t1 = ConvertFrom-RkSecureString $p1
+                $t2 = ConvertFrom-RkSecureString $p2
+                if ($t1 -ne $t2) { Write-Warn2 'Lösenorden var olika. Försök igen.' }
+                elseif ($t1.Length -lt $script:RkMinPasswordLength) { Write-Warn2 "Lösenordet är för kort (minst $($script:RkMinPasswordLength) tecken). Försök igen." }
+                else { $ZipPassword = $p1 }
+                $t1 = $null; $t2 = $null
+            }
+            if (-not $ZipPassword) { Fail 'Inget giltigt lösenord angavs.' 'Kör om och välj ett lösenord på minst 12 tecken, eller använd -NoEncrypt om resultatet inte lämnar datorn.' }
+        }
+        elseif ((ConvertFrom-RkSecureString $ZipPassword).Length -lt $script:RkMinPasswordLength) { Fail "Lösenordet i -ZipPassword är för kort (minst $($script:RkMinPasswordLength) tecken)." 'Ange ett längre lösenord.' }
+        Write-Ok 'Lösenord för zip-filen är valt'
+    }
+
     # Loggar: en rensad logg (rapportkit.log) och hela konsolutskriften inklusive verktygens text (rapportkit-console.log).
     Initialize-Log $RunDir
     try { Start-Transcript -Path (Join-Path $RunDir 'rapportkit-console.log') -Append | Out-Null; $TranscriptStarted = $true } catch { Write-Warn2 'Kunde inte starta konsolloggen (fortsätter ändå).' }
@@ -1472,8 +1507,26 @@ try {
     if (-not $NoZip) {
         try {
             $zipPath = Join-Path $OutputRoot ('rapportkit_{0}_{1}.zip' -f $TenantId.Substring(0, 8), $Period)
+            if ($ZipPassword) { $zipPath += '.rkenc' }
             if (Test-Path $zipPath) { Remove-Item $zipPath -Force }
-            Get-ChildItem -Path $RunDir -Force | Where-Object { $_.Name -ne 'rapportkit-console.log' } | Compress-Archive -DestinationPath $zipPath -Force
+            if ($ZipPassword) {
+                # Zip skapas tillfälligt, krypteras, kontrolleras genom att dekrypteras igen och tas sedan bort.
+                $plainZip = Join-Path ([System.IO.Path]::GetTempPath()) ('rapportkit-' + [guid]::NewGuid().ToString('N') + '.zip')
+                $checkZip = "$plainZip.check"
+                try {
+                    Get-ChildItem -Path $RunDir -Force | Where-Object { $_.Name -ne 'rapportkit-console.log' } | Compress-Archive -DestinationPath $plainZip -Force
+                    Write-Action 'Krypterar zip-filen (AES-256)'
+                    Protect-RapportkitFile -Path $plainZip -Destination $zipPath -Password $ZipPassword
+                    Unprotect-RapportkitFile -Path $zipPath -Destination $checkZip -Password $ZipPassword
+                    if ((Get-FileHash $checkZip -Algorithm SHA256).Hash -ne (Get-FileHash $plainZip -Algorithm SHA256).Hash) { throw 'Kontrollen av den krypterade filen misslyckades (innehållet stämmer inte efter dekryptering).' }
+                }
+                catch { Remove-Item $zipPath -Force -ErrorAction SilentlyContinue; throw }
+                finally { Remove-Item $plainZip, $checkZip -Force -ErrorAction SilentlyContinue }
+            }
+            else {
+                Add-Warning 'Zip-filen är INTE krypterad (-NoEncrypt). Lämna den inte via e-post.'
+                Get-ChildItem -Path $RunDir -Force | Where-Object { $_.Name -ne 'rapportkit-console.log' } | Compress-Archive -DestinationPath $zipPath -Force
+            }
             $zipHash = (Get-FileHash $zipPath -Algorithm SHA256).Hash
             Set-Content -Path "$zipPath.sha256" -Value ('{0} *{1}' -f $zipHash, (Split-Path $zipPath -Leaf)) -Encoding ascii
             Write-Ok ('Zip skapad ({0:N1} MB), kontrollsumma sparad i {1}.sha256' -f ((Get-Item $zipPath).Length / 1MB), (Split-Path $zipPath -Leaf))
@@ -1484,7 +1537,7 @@ try {
     $facts = [System.Collections.Generic.List[object]]::new()
     $facts.Add(@('Rapport', $reportPath))
     $facts.Add(@('Resultatmapp', $RunDir))
-    if ($zipPath) { $facts.Add(@('Zip', $zipPath)); $facts.Add(@('SHA256', $zipHash)) }
+    if ($zipPath) { $facts.Add(@($(if ($ZipPassword) { 'Krypterad zip' } else { 'Zip' }), $zipPath)); $facts.Add(@('SHA256', $zipHash)) }
     $facts.Add(@('Loggar', 'rapportkit.log (rensad), rapportkit-console.log (allt) och run-summary.json i resultatmappen'))
     $facts.Add(@('Total tid', (Format-Duration ((Get-Date) - $script:RunStart).TotalSeconds)))
     if ($anyFail) { $facts.Add(@('Kör om', (Get-RerunCommand))) }
@@ -1492,6 +1545,7 @@ try {
     if ($anyFail) { Write-Warn2 'Något verktyg misslyckades (se ovan). Rapporten visar det som gick bra. Åtgärda och kör om med kommandot ovan.' }
     Write-Host ''
     Write-Action 'Nästa steg: öppna rapporten och kontrollera innehållet. Resultatet är konfidentiellt: lämna det bara på överenskommen plats.'
+    if ($zipPath -and $ZipPassword) { Write-Action 'Skicka den krypterade filen (.rkenc) och .sha256-filen, och ge mottagaren lösenordet via en annan kanal än filen. Mappen med okrypterade resultat ligger kvar på datorn: ta bort den när uppdraget är klart.' }
 
     Invoke-SessionCleanup
     foreach ($tmpf in @((Join-Path $env:TEMP 'azqr.zip'), (Join-Path $env:TEMP "azgovviz-$GvVersion.zip"))) { Remove-Item $tmpf -Force -ErrorAction SilentlyContinue }

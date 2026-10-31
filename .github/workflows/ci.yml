@@ -18,7 +18,7 @@ jobs:
         shell: pwsh
         run: |
           $ok = $true
-          foreach ($file in 'Run-Rapportkit.ps1', 'Build-Bundle.ps1', 'lib/Report.ps1') {
+          foreach ($file in 'Run-Rapportkit.ps1', 'Build-Bundle.ps1', 'Unprotect-Rapportkit.ps1', 'lib/Report.ps1', 'lib/Crypto.ps1') {
             foreach ($ps in 'powershell', 'pwsh') {
               $cmd = "`$e=`$null; [void][System.Management.Automation.Language.Parser]::ParseFile('$((Resolve-Path $file).Path)',[ref]`$null,[ref]`$e); if (`$e) { `$e | ForEach-Object { `$_.Message }; exit 1 }"
               & $ps -NoProfile -Command $cmd
