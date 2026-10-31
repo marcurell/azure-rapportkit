@@ -69,7 +69,15 @@ Allt hamnar i `<resultatmapp>\<år-månad>\`:
 | `rapportkit-console.log` | Hela konsolutskriften inklusive verktygens text (felsökning; tas inte med i zippen) |
 | `run-summary.json` | Maskinläsbar sammanfattning: versioner, tid per steg, status, varningar, slutkod |
 
-Utanför mappen: `rapportkit_<tenant>_<år-månad>.zip` med en `.sha256`-fil, så att mottagaren kan kontrollera att filen kommit fram oförändrad (stäng av med `-NoZip`). Zippen är inte krypterad.
+Utanför mappen: `rapportkit_<tenant>_<år-månad>.zip.rkenc` med en `.sha256`-fil, så att mottagaren kan kontrollera att filen kommit fram oförändrad (stäng av med `-NoZip`). Filen är **lösenordskrypterad** (AES-256): scriptet frågar efter ett lösenord (minst 12 tecken, bekräftas två gånger) i början av körningen. Den som kör skickar filen och lösenordet på **olika vägar** (till exempel filen via e-post och lösenordet via SMS). Mottagaren packar upp med `Unprotect-Rapportkit.ps1` (se nedan). Mappen med okrypterade resultat ligger kvar på kundens dator och bör tas bort när uppdraget är klart. `-NoEncrypt` ger en vanlig zip (bara om resultatet inte lämnar datorn).
+
+### Packa upp ett krypterat paket
+
+```powershell
+.\Unprotect-Rapportkit.ps1 -Path C:\Temp\rapportkit_a6017aee_2026-10.zip.rkenc
+```
+
+Scriptet kontrollerar `.sha256`-filen om den ligger bredvid, frågar efter lösenordet och packar upp i en mapp bredvid filen. Fel lösenord eller en ändrad fil ger ett tydligt fel. Formatet är ett eget, men bygger bara på standardfunktioner i .NET: PBKDF2-HMAC-SHA256 (600 000 varv) för nycklarna, AES-256-CBC och HMAC-SHA256 (encrypt-then-MAC). Det är inte granskat av tredje part: välj ett långt lösenord.
 
 **Utloggning:** scriptet loggar ut de sessioner (Azure CLI, Azure PowerShell, Microsoft Graph) som det själv skapade när det är klart. En inloggning som fanns innan rörs inte. Stäng av med `-KeepLogin`.
 
@@ -137,6 +145,8 @@ Har kontot bara åtkomst till en subscription faller Governance Visualizer på b
 | `-HidePersonalData` | Dölj namn och e-postadresser i Governance Visualizers rapport (Maesters rapport kan ändå innehålla namn) |
 | `-KeepLogin` | Logga inte ut från sessioner som scriptet skapade |
 | `-NoZip` | Skapa ingen zip av resultatet |
+| `-NoEncrypt` | Kryptera inte zip-filen (som standard krypteras den med ett lösenord du anger i början) |
+| `-ZipPassword <SecureString>` | Lösenord för zip-filen vid automatiska körningar (PowerShell 7) |
 | `-Plain` | Rita ramar med ASCII-tecken (för konsoler som visar specialtecken fel) |
 | `-LatestTools` | Använd senaste verktygsversioner istället för de testade, och hoppa över kontrollsummor |
 | `-AllowUnverified` | Fortsätt trots att en kontrollsumma inte stämmer. Använd bara efter egen kontroll |

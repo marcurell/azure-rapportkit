@@ -69,7 +69,8 @@ Rapportens utseende (färger, logga, sidfot) styrs av ett tema som kan bytas, se
 ## Hur resultatet lämnas över
 
 - Scriptet skapar en zip-fil med en tillhörande kontrollsumma (`.sha256`) så att mottagaren kan kontrollera att filen inte ändrats.
-- Zip-filen är **inte krypterad**. Lämna den bara via en kanal som ni har kommit överens om (till exempel ett delat område med begränsad behörighet), och i enlighet med era avtal om sekretess och personuppgiftsbehandling.
+- Scriptet frågar efter ett **lösenord** (minst 12 tecken) i början av körningen och krypterar zip-filen med det (AES-256). Filen heter `rapportkit_<tenant>_<period>.zip.rkenc`. Skicka filen och lösenordet **på olika vägar** (till exempel filen via e-post och lösenordet via SMS eller telefon). Lösenordet sparas inte någonstans av scriptet.
+- Mappen med de okrypterade resultaten ligger kvar på datorn som körde scriptet. Ta bort den när uppdraget är klart.
 - Scriptet skickar inget resultat någonstans själv.
 
 ## Så granskar ni scriptet innan körning

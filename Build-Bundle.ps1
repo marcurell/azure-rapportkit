@@ -116,7 +116,7 @@ if (Test-Path $Out) { Remove-Item $Out -Force }
 $stage = Join-Path $env:TEMP 'rapportkit-stage'
 if (Test-Path $stage) { Remove-Item $stage -Recurse -Force }
 New-Item -ItemType Directory $stage | Out-Null
-foreach ($file in 'Run-Rapportkit.ps1', 'README.md', 'LICENSE', 'THIRD-PARTY-NOTICES.md') { Copy-Item (Join-Path $PSScriptRoot $file) $stage }
+foreach ($file in 'Run-Rapportkit.ps1', 'Unprotect-Rapportkit.ps1', 'README.md', 'LICENSE', 'THIRD-PARTY-NOTICES.md') { Copy-Item (Join-Path $PSScriptRoot $file) $stage }
 New-Item -ItemType Directory "$stage\docs" | Out-Null
 Copy-Item (Join-Path $PSScriptRoot 'docs\KUNDINFO.md') "$stage\docs"
 Copy-Item (Join-Path $PSScriptRoot 'docs\Anvandarguide-Azure-Rapportkit.docx') "$stage\docs"
