@@ -194,8 +194,14 @@ Describe 'Write-ReportSite (sidbygge)' {
             $h = Get-Content $f.FullName -Raw
             $h | Should -Match 'class="rk-nav"'
             $h | Should -Match '--rk-accent:#f97316'
-            ([regex]::Matches($h, 'aria-current="page"')).Count | Should -Be 1
+            # Den samlade PDF-sidan (rapport-komplett.html) markerar ingen enskild flik.
+            ([regex]::Matches($h, 'aria-current="page"')).Count | Should -Be $(if ($f.Name -eq 'rapport-komplett.html') { 0 } else { 1 })
         }
+    }
+    It 'PDF-knappen öppnar den samlade rapporten med alla sex sidor' {
+        $full = Get-Content (Join-Path $script:RunDir 'rapport-komplett.html') -Raw
+        ([regex]::Matches($full, '<section class="rk-sec">')).Count | Should -Be 6
+        (Get-Content (Join-Path $script:RunDir 'rapport.html') -Raw) | Should -Match 'href="rapport-komplett\.html#skriv" target="_blank"'
     }
     It 'hämtar inget från internet (inga src/href mot externa adresser utom kontaktlänken)' {
         foreach ($f in Get-ChildItem $script:RunDir -Filter 'rapport*.html') {
