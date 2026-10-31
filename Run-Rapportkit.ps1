@@ -140,7 +140,7 @@ $TotalSteps = 10
 # Governance Visualizer hämtas som en fast version (den som testats). Ändras med flit, inte av misstag.
 $GvVersion = '6.7.2'
 $GvUrl = "https://github.com/Azure/Azure-Governance-Visualizer/archive/refs/tags/$GvVersion.zip"
-$KitVersion = '1.0.8'
+$KitVersion = '1.0.9'
 
 # Testade (pinnade) verktygsversioner, och kontrollsummor (SHA256) för de zip-filer som hämtas direkt. Då får kunden
 # samma verktyg som vi har testat, och en ändrad fil upptäcks. Verktygen installerade via winget kontrolleras av winget

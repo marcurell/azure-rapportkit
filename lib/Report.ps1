@@ -184,6 +184,7 @@ a{color:var(--rk-accent-text)}
 .rk-meta{color:var(--rk-muted);font-size:13px;text-align:right}
 .rk-btn{font:inherit;font-size:13px;font-weight:600;border:1px solid var(--rk-border);background:var(--rk-surface-alt);color:var(--rk-text);border-radius:6px;padding:5px 10px;cursor:pointer;margin-top:6px}
 .rk-btn:hover{border-color:var(--rk-accent)}
+a.rk-btn{display:inline-block;text-decoration:none}
 .rk-nav{background:var(--rk-surface-alt);border-bottom:1px solid var(--rk-border)}
 .rk-nav-in{max-width:1120px;margin:0 auto;padding:0 20px;display:flex;gap:2px;flex-wrap:wrap}
 .rk-nav a{padding:11px 14px;text-decoration:none;color:var(--rk-muted);font-weight:600;font-size:14px;border-bottom:3px solid transparent}
@@ -221,7 +222,8 @@ td.num,th.num{text-align:right;white-space:nowrap}
 .rk-ext{font-size:.85em}
 .rk-foot{max-width:1120px;margin:0 auto;padding:16px 20px 40px;color:var(--rk-muted);font-size:12.5px;border-top:1px solid var(--rk-border);display:flex;justify-content:space-between;gap:12px;flex-wrap:wrap}
 @media (max-width:700px){table{display:block;overflow-x:auto}.rk-meta{text-align:left}.rk-top-in{padding:12px 14px}.rk-main{padding:18px 14px 30px}}
-@media print{.rk-nav,.noprint{display:none}body{background:#fff;color:#000}.rk-top{border-top-width:4px}h2,h3{break-after:avoid}table,.tile,.card{break-inside:avoid}a{color:inherit;text-decoration:none}.rk-main{padding-top:10px}}
+.rk-sec{margin-top:36px;padding-top:8px;border-top:1px solid var(--rk-border)}
+@media print{.rk-sec{break-before:page;margin-top:0;border-top:0;padding-top:0}.rk-sec:first-of-type{break-before:auto}.rk-nav,.noprint{display:none}body{background:#fff;color:#000}.rk-top{border-top-width:4px}h2,h3{break-after:avoid}table,.tile,.card{break-inside:avoid}a{color:inherit;text-decoration:none}.rk-main{padding-top:10px}}
 '@
 
 # Hela CSS-filen för ett tema: variabler för ljust, mörkt (följer läsarens inställning) och utskrift (alltid ljust),
@@ -689,6 +691,13 @@ function New-ReportPageHtml($Ctx, [string]$ActiveKey, [string]$Title, [string]$L
     }
     $footLeft = (@((Esc $t.footer), $contact) | Where-Object { $_ }) -join ' &middot; '
     $sub = if ($t.reportTitle) { '<span class="rk-sub">{0}</span>' -f (Esc $t.reportTitle) } else { '' }
+    # Knappen ger alltid hela rapporten: på delsidorna öppnas sammanställningen (alla sidor) i nytt fönster och utskriftsdialogen visas där.
+    $printBtn = if ($ActiveKey -eq 'komplett') {
+        '<button class="rk-btn noprint" type="button" onclick="window.print()">Skriv ut / spara hela rapporten som PDF</button>'
+    } else {
+        '<a class="rk-btn noprint" href="rapport-komplett.html#skriv" target="_blank" rel="noopener noreferrer">Spara hela rapporten som PDF</a>'
+    }
+    $autoPrint = if ($ActiveKey -eq 'komplett') { '<script>if(location.hash==="#skriv"){window.addEventListener("load",function(){setTimeout(function(){window.print()},400)})}</script>' } else { '' }
     @"
 <!doctype html>
 <html lang="sv"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
@@ -699,7 +708,7 @@ $($Ctx.Css)
 </style></head><body>
 <header class="rk-top"><div class="rk-top-in">
 <div class="rk-logo">$($Ctx.LogoHtml)$sub</div>
-<div class="rk-meta">Tenant $(Esc $TenantId)<br>Period $(Esc $Period) &middot; $(Get-Date -Format 'yyyy-MM-dd HH:mm')<br><button class="rk-btn noprint" type="button" onclick="window.print()">Skriv ut / spara som PDF</button></div>
+<div class="rk-meta">Tenant $(Esc $TenantId)<br>Period $(Esc $Period) &middot; $(Get-Date -Format 'yyyy-MM-dd HH:mm')<br>$printBtn</div>
 </div></header>
 <nav class="rk-nav" aria-label="Sidor i rapporten"><div class="rk-nav-in">$nav</div></nav>
 <main class="rk-main">
@@ -708,6 +717,7 @@ $($Ctx.Css)
 $Content
 </main>
 <footer class="rk-foot"><span>$footLeft</span><span>Konfidentiell information &middot; skapad med Azure Rapportkit v$(Esc $KitVersion)</span></footer>
+$autoPrint
 </body></html>
 "@
 }
@@ -749,5 +759,12 @@ function Write-ReportSite {
         Set-Content -LiteralPath $path -Value $html -Encoding utf8
         if ($p.Key -eq 'oversikt') { $index = $path }
     }
+    # Sammanställning av alla sidor i ett dokument (för PDF/utskrift). Varje avsnitt börjar på ny sida i utskriften.
+    try {
+        $all = ($pages | ForEach-Object { '<section class="rk-sec"><h1>{0}</h1><p class="rk-lead">{1}</p>{2}</section>' -f (Esc $_.Title), (Esc $_.Lead), $content[$_.Key] }) -join "`n"
+        $full = New-ReportPageHtml $ctx 'komplett' 'Komplett rapport' 'Alla sidor i rapporten i ett dokument, för utskrift eller PDF.' $all
+        Set-Content -LiteralPath (Join-Path $RunDir 'rapport-komplett.html') -Value $full -Encoding utf8
+    }
+    catch { Add-Warning "Den samlade rapporten (PDF-versionen) kunde inte byggas: $($_.Exception.Message)" }
     $index
 }

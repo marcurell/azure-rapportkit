@@ -1,0 +1,49 @@
+{
+  "name": "Orange Business",
+  "reportTitle": "Azure Assessment",
+  "tagline": "",
+  "logo": {
+    "type": "wordmark",
+    "parts": [
+      { "text": "Orange", "color": "accent" },
+      { "text": "Business", "color": "text" }
+    ]
+  },
+  "colors": {
+    "light": {
+      "bg": "#f4f4f4",
+      "surface": "#ffffff",
+      "surfaceAlt": "#eeeeee",
+      "border": "#cccccc",
+      "text": "#000000",
+      "muted": "#595959",
+      "accent": "#ff7900",
+      "accentText": "#c25a00",
+      "onAccent": "#000000"
+    },
+    "dark": {
+      "bg": "#000000",
+      "surface": "#141414",
+      "surfaceAlt": "#1f1f1f",
+      "border": "#333333",
+      "text": "#ffffff",
+      "muted": "#b3b3b3",
+      "accent": "#ff7900",
+      "accentText": "#ff7900",
+      "onAccent": "#000000"
+    },
+    "status": {
+      "high": "#cd3c14",
+      "medium": "#c28a00",
+      "low": "#527edb",
+      "ok": "#2a9d2a"
+    }
+  },
+  "fonts": {
+    "body": "\"Helvetica Neue\", Helvetica, Arial, sans-serif",
+    "heading": "\"Helvetica Neue\", Helvetica, Arial, sans-serif"
+  },
+  "footer": "Orange Business",
+  "contact": { "text": "", "url": "" },
+  "customCss": ""
+}

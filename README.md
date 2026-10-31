@@ -10,7 +10,7 @@ Ett PowerShell-script som tar fram underlag inför en Azure-genomgång. Det häm
 | [azqr](https://github.com/Azure/azqr) | Rekommendationer per resurs, Advisor, Defender |
 | [Maester](https://maester.dev) (valfritt) | Tester av Entra ID: MFA, Conditional Access, privilegierade roller |
 
-Scriptet **skriver inget i Azure-resurser eller i Entra-konfigurationen**. Det gör däremot följande, vilket är bra att veta: det installerar verktyg på datorn, skapar inloggningssessioner (som syns i tenantens loggar), kräver att en administratör godkänner läsbehörigheter för Maester (admin consent, en ändring i tenanten), och sparar konfidentiella resultat lokalt. Allt detta beskrivs för kunden i [docs/KUNDINFO.md](docs/KUNDINFO.md). Verktygen och deras licenser finns i [THIRD-PARTY-NOTICES.md](THIRD-PARTY-NOTICES.md).
+Scriptet **skriver inget i Azure-resurser eller i Entra-konfigurationen**. Det gör däremot följande, vilket är bra att veta: det installerar verktyg på datorn, skapar inloggningssessioner (som syns i tenantens loggar), kräver att en administratör godkänner läsbehörigheter för Maester (admin consent, en ändring i tenanten), och sparar konfidentiella resultat lokalt. Allt detta beskrivs för kunden i [docs/KUNDINFO.md](docs/KUNDINFO.md). Verktygen och deras licenser finns i [THIRD-PARTY-NOTICES.md](THIRD-PARTY-NOTICES.md). Steg för steg för den som kör verktyget: [Användarguide (Word)](docs/Anvandarguide-Azure-Rapportkit.docx).
 
 ## Snabbstart: ett kommando
 
@@ -21,10 +21,10 @@ Scriptet **skriver inget i Azure-resurser eller i Entra-konfigurationen**. Det g
 $dest = Join-Path $env:USERPROFILE 'rapportkit-kit'
 $zip  = Join-Path $env:TEMP 'azure-rapportkit.zip'
 New-Item -ItemType Directory -Force $dest | Out-Null
-Invoke-WebRequest 'https://github.com/marcurell/azure-rapportkit/archive/refs/tags/v1.0.8.zip' -OutFile $zip
+Invoke-WebRequest 'https://github.com/marcurell/azure-rapportkit/archive/refs/tags/v1.0.9.zip' -OutFile $zip
 Expand-Archive $zip $dest -Force
 Get-ChildItem $dest -Recurse | Unblock-File
-$script = Join-Path $dest 'azure-rapportkit-1.0.8\Run-Rapportkit.ps1'
+$script = Join-Path $dest 'azure-rapportkit-1.0.9\Run-Rapportkit.ps1'
 $arg = '-NoExit -ExecutionPolicy Bypass -File "' + $script + '"'
 Start-Process powershell -ArgumentList $arg
 ```
@@ -75,10 +75,10 @@ Utanför mappen: `rapportkit_<tenant>_<år-månad>.zip` med en `.sha256`-fil, s�
 
 ## Utseende (branding)
 
-Rapporten är en flersidig webbplats i en gemensam stil, med navigering, ljust och mörkt läge (följer läsarens inställning) och utskriftsläge ("Skriv ut / spara som PDF"). Utseendet styrs av ett **tema**: en mapp med `theme.json` (färger, typsnitt, logga, sidfot) och eventuellt en logofil och egen CSS. Standardtemat är `molnpasvenska`.
+Rapporten är en flersidig webbplats i en gemensam stil, med navigering, ljust och mörkt läge (följer läsarens inställning) och utskriftsläge. Knappen "Spara hela rapporten som PDF" öppnar en sammanställning av alla sidor (`rapport-komplett.html`) och visar utskriftsdialogen. Utseendet styrs av ett **tema**: en mapp med `theme.json` (färger, typsnitt, logga, sidfot) och eventuellt en logofil och egen CSS. Standardtemat är `molnpasvenska`; det finns också `neutral` och `orange` (Orange Business-färger, platshållarlogga: se `branding/orange/README.md`).
 
 ```powershell
-.\Run-Rapportkit.ps1 -Brand neutral                  # ett annat tema i branding\
+.\Run-Rapportkit.ps1 -Brand orange                   # ett annat tema i branding\
 .\Run-Rapportkit.ps1 -BrandPath D:\teman\kundnamn    # ett tema var som helst
 .\Run-Rapportkit.ps1 -ReportOnly -Brand neutral      # bygg om rapporten från befintliga resultat, utan att köra verktygen
 ```
