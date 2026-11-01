@@ -15,6 +15,7 @@
 #>
 
 Add-Type -AssemblyName System.Web
+. (Join-Path $ScriptRoot 'lib\Anonymize.ps1')
 
 # ===========================================================================
 # Hjälpare
@@ -86,6 +87,7 @@ $script:DefaultThemeJson = @'
   "fonts": { "body": "system-ui, \"Segoe UI\", Roboto, Helvetica, Arial, sans-serif", "heading": "" },
   "footer": "",
   "contact": { "text": "", "url": "" },
+  "background": { "file": "", "opacity": 0.08 },
   "customCss": ""
 }
 '@
@@ -100,7 +102,16 @@ function Get-BrandTheme([string]$Brand, [string]$BrandPath) {
     if ($BrandPath) { $dir = $BrandPath }
     elseif ($Brand) {
         if ($Brand -notmatch '^[A-Za-z0-9_-]+$') { Add-Warning "Ogiltigt temanamn '$Brand' (bara bokstäver, siffror, - och _). Använder inbyggd standard." }
-        else { $dir = Join-Path (Join-Path $ScriptRoot 'branding') $Brand }
+        else {
+            # Temat letas upp i tur och ordning: branding-local\ bredvid scriptet (ingår aldrig i repot), den egna temamappen
+            # %USERPROFILE%\.rapportkit\themes\ (överlever nya versioner av kitet) och sist branding\ som följer med kitet.
+            $roots = @((Join-Path $ScriptRoot 'branding-local'), (Join-Path $env:USERPROFILE '.rapportkit\themes'), (Join-Path $ScriptRoot 'branding'))
+            foreach ($r in $roots) {
+                $cand = Join-Path $r $Brand
+                if (Test-Path -LiteralPath (Join-Path $cand 'theme.json')) { $dir = $cand; break }
+            }
+            if (-not $dir) { $dir = Join-Path $roots[-1] $Brand }
+        }
     }
     if ($dir) {
         $file = Join-Path $dir 'theme.json'
@@ -141,20 +152,33 @@ function Get-BrandTheme([string]$Brand, [string]$BrandPath) {
 }
 
 # Loggan som HTML: en bildfil från temamappen (inbäddad som data-URI) eller en ordbild av färgade textdelar.
+function Get-ThemeImageUri($Theme, [string]$File, [int]$MaxKB = 300) {
+    if (-not $Theme.Dir) { throw 'temat har ingen mapp' }
+    $full = [IO.Path]::GetFullPath((Join-Path $Theme.Dir $File))
+    $root = [IO.Path]::GetFullPath($Theme.Dir).TrimEnd('\') + '\'
+    if (-not $full.StartsWith($root, [StringComparison]::OrdinalIgnoreCase)) { throw 'filen ligger utanför temamappen' }
+    $mime = switch ([IO.Path]::GetExtension($full).ToLower()) { '.svg' { 'image/svg+xml' } '.png' { 'image/png' } '.jpg' { 'image/jpeg' } '.jpeg' { 'image/jpeg' } '.gif' { 'image/gif' } '.webp' { 'image/webp' } default { $null } }
+    if (-not $mime) { throw 'filtypen stöds inte (använd svg, png, jpg, gif eller webp)' }
+    if (-not (Test-Path -LiteralPath $full -PathType Leaf)) { throw "filen $File finns inte i temamappen" }
+    if ((Get-Item -LiteralPath $full).Length -gt ($MaxKB * 1KB)) { throw "filen är större än $MaxKB KB" }
+    'data:{0};base64,{1}' -f $mime, [Convert]::ToBase64String([IO.File]::ReadAllBytes($full))
+}
+
 function Get-LogoHtml($Theme) {
     $t = $Theme.Data
     $logo = $t.logo
     if ($logo -is [hashtable] -and $logo.type -eq 'image' -and $logo.file -and $Theme.Dir) {
         try {
-            $full = [IO.Path]::GetFullPath((Join-Path $Theme.Dir ([string]$logo.file)))
-            $root = [IO.Path]::GetFullPath($Theme.Dir).TrimEnd('\') + '\'
-            if (-not $full.StartsWith($root, [StringComparison]::OrdinalIgnoreCase)) { throw 'filen ligger utanför temamappen' }
-            $mime = switch ([IO.Path]::GetExtension($full).ToLower()) { '.svg' { 'image/svg+xml' } '.png' { 'image/png' } '.jpg' { 'image/jpeg' } '.jpeg' { 'image/jpeg' } '.gif' { 'image/gif' } '.webp' { 'image/webp' } default { $null } }
-            if (-not $mime) { throw 'filtypen stöds inte (använd svg, png, jpg, gif eller webp)' }
-            if ((Get-Item -LiteralPath $full).Length -gt 300KB) { throw 'filen är större än 300 KB' }
             $height = 36
             if ($logo.height) { $height = [int][math]::Min([math]::Max([double]$logo.height, 16), 80) }
-            return ('<img class="rk-logo-img" src="data:{0};base64,{1}" alt="{2}" style="height:{3}px">' -f $mime, [Convert]::ToBase64String([IO.File]::ReadAllBytes($full)), (Esc $logo.alt), $height)
+            $light = Get-ThemeImageUri $Theme ([string]$logo.file)
+            $img = { param($uri, $cls) '<img class="rk-logo-img{0}" src="{1}" alt="{2}" style="height:{3}px">' -f $cls, $uri, (Esc $logo.alt), $height }
+            # Valfri logga för mörkt läge (logo.fileDark): visas i stället för den ljusa när läsaren använder mörkt läge.
+            if ($logo.fileDark) {
+                try { return ((& $img $light ' rk-l-light') + (& $img (Get-ThemeImageUri $Theme ([string]$logo.fileDark)) ' rk-l-dark')) }
+                catch { Add-Warning "Temats mörka logga (fileDark) kunde inte användas ($($_.Exception.Message)). Den ljusa används i båda lägena." }
+            }
+            return (& $img $light '')
         }
         catch { Add-Warning "Temats logga kunde inte användas ($($_.Exception.Message)). Visar namnet som ordbild." }
     }
@@ -180,6 +204,9 @@ a{color:var(--rk-accent-text)}
 .rk-logo{display:flex;align-items:center;gap:12px;font-weight:700;font-size:21px;letter-spacing:-.01em;color:var(--rk-text);text-decoration:none}
 .rk-logo .rk-w-accent{color:var(--rk-accent)}.rk-logo .rk-w-accenttext{color:var(--rk-accent-text)}.rk-logo .rk-w-muted{color:var(--rk-muted)}
 .rk-logo-img{width:auto;max-width:260px}
+.rk-l-dark{display:none}
+@media (prefers-color-scheme:dark){.rk-l-light{display:none}.rk-l-dark{display:inline}}
+@media print{.rk-l-dark{display:none}.rk-l-light{display:inline}}
 .rk-sub{font-weight:500;font-size:13px;color:var(--rk-muted);letter-spacing:0;border-left:1px solid var(--rk-border);padding-left:12px}
 .rk-meta{color:var(--rk-muted);font-size:13px;text-align:right}
 .rk-btn{font:inherit;font-size:13px;font-weight:600;border:1px solid var(--rk-border);background:var(--rk-surface-alt);color:var(--rk-text);border-radius:6px;padding:5px 10px;cursor:pointer;margin-top:6px}
@@ -239,6 +266,16 @@ function New-ThemeCss($Theme) {
     $css += '@media (prefers-color-scheme:dark){:root{' + (& $colorVars $t.colors.dark) + "}}`n"
     $css += '@media print{:root{' + (& $colorVars $t.colors.light) + "}}`n"
     $css += $script:BaseCss
+    # Valfri bakgrundsbild (background.file), fast bakom innehållet med låg täckning så att texten förblir läsbar. Visas inte vid utskrift.
+    if ($t.background -is [hashtable] -and $t.background.file -and $Theme.Dir) {
+        try {
+            $uri = Get-ThemeImageUri $Theme ([string]$t.background.file) 500
+            $op = 0.08
+            if ($null -ne $t.background.opacity) { $op = [math]::Min([math]::Max((ConvertTo-Number $t.background.opacity), 0), 1) }
+            $css += ("`nbody::before{{content:`"`";position:fixed;inset:0;z-index:-1;pointer-events:none;background:url(`"{0}`") center/cover no-repeat;opacity:{1}}}@media print{{body::before{{display:none}}}}" -f $uri, ([string]$op -replace ',', '.'))
+        }
+        catch { Add-Warning "Temats bakgrundsbild kunde inte användas ($($_.Exception.Message))." }
+    }
     if ($t.customCss -and $Theme.Dir) {
         try {
             $full = [IO.Path]::GetFullPath((Join-Path $Theme.Dir ([string]$t.customCss)))
@@ -697,6 +734,8 @@ function New-ReportPageHtml($Ctx, [string]$ActiveKey, [string]$Title, [string]$L
     } else {
         '<a class="rk-btn noprint" href="rapport-komplett.html#skriv" target="_blank" rel="noopener noreferrer">Spara hela rapporten som PDF</a>'
     }
+    $tenantShown = if ($Ctx.Anon) { '(anonymiserad)' } else { $TenantId }
+    $banner = if ($Ctx.Banner) { $Ctx.Banner } else { '' }
     $autoPrint = if ($ActiveKey -eq 'komplett') { '<script>if(location.hash==="#skriv"){window.addEventListener("load",function(){setTimeout(function(){window.print()},400)})}</script>' } else { '' }
     @"
 <!doctype html>
@@ -708,12 +747,13 @@ $($Ctx.Css)
 </style></head><body>
 <header class="rk-top"><div class="rk-top-in">
 <div class="rk-logo">$($Ctx.LogoHtml)$sub</div>
-<div class="rk-meta">Tenant $(Esc $TenantId)<br>Period $(Esc $Period) &middot; $(Get-Date -Format 'yyyy-MM-dd HH:mm')<br>$printBtn</div>
+<div class="rk-meta">Tenant $(Esc $tenantShown)<br>Period $(Esc $Period) &middot; $(Get-Date -Format 'yyyy-MM-dd HH:mm')<br>$printBtn</div>
 </div></header>
 <nav class="rk-nav" aria-label="Sidor i rapporten"><div class="rk-nav-in">$nav</div></nav>
 <main class="rk-main">
 <h1>$(Esc $Title)</h1>
 <p class="rk-lead">$(Esc $Lead)</p>
+$banner
 $Content
 </main>
 <footer class="rk-foot"><span>$footLeft</span><span>Konfidentiell information &middot; skapad med Azure Rapportkit v$(Esc $KitVersion)</span></footer>
@@ -766,5 +806,26 @@ function Write-ReportSite {
         Set-Content -LiteralPath (Join-Path $RunDir 'rapport-komplett.html') -Value $full -Encoding utf8
     }
     catch { Add-Warning "Den samlade rapporten (PDF-versionen) kunde inte byggas: $($_.Exception.Message)" }
+
+    # Anonymiserad version: egna sidor i anonym\ där namn, e-postadresser och ID:n är utbytta mot alias.
+    if ($Anonymize) {
+        try {
+            Write-Action 'Bygger den anonymiserade versionen (anonym\)'
+            Register-AnonData $d
+            $anonDir = Join-Path $RunDir 'anonym'
+            New-Item -ItemType Directory -Force $anonDir | Out-Null
+            $ctxA = @{ Theme = $theme; Pages = $pages; Css = $ctx.Css; LogoHtml = $ctx.LogoHtml; Anon = $true
+                Banner = (New-Callout '<b>Anonymiserad version.</b> Namn, e-postadresser och ID:n är ersatta med alias (till exempel "Användare 3"), och verktygens egna rapporter ingår inte. Texter som inte fångats av anonymiseringen, till exempel egna policynamn och taggvärden, kan finnas kvar: läs igenom innan delning.') }
+            $contentA = @{}
+            foreach ($p in $pages) { $contentA[$p.Key] = ConvertTo-AnonymousHtml $content[$p.Key] }
+            foreach ($p in $pages) {
+                Set-Content -LiteralPath (Join-Path $anonDir $p.File) -Value (New-ReportPageHtml $ctxA $p.Key $p.Title $p.Lead $contentA[$p.Key]) -Encoding utf8
+            }
+            $allA = ($pages | ForEach-Object { '<section class="rk-sec"><h1>{0}</h1><p class="rk-lead">{1}</p>{2}</section>' -f (Esc $_.Title), (Esc $_.Lead), $contentA[$_.Key] }) -join "`n"
+            Set-Content -LiteralPath (Join-Path $anonDir 'rapport-komplett.html') -Value (New-ReportPageHtml $ctxA 'komplett' 'Komplett rapport' 'Alla sidor i rapporten i ett dokument, för utskrift eller PDF.' $allA) -Encoding utf8
+            Write-Ok ('Anonymiserad rapport: {0}' -f (Join-Path $anonDir 'rapport.html'))
+        }
+        catch { Add-Warning "Den anonymiserade versionen kunde inte byggas: $($_.Exception.Message)" }
+    }
     $index
 }

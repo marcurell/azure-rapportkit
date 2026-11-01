@@ -79,6 +79,9 @@
   Logga inte ut från de sessioner scriptet själv skapade (Azure CLI, Azure PowerShell, Microsoft Graph).
 .PARAMETER NoZip
   Skapa ingen zip-fil av resultatet.
+.PARAMETER Anonymize
+  Bygg även en anonymiserad version av rapporten i mappen anonym\ (namn, e-postadresser och ID:n byts mot alias), för
+  demo eller delning. Anges det inte frågar scriptet i början (om inte -Yes är satt).
 .PARAMETER NoEncrypt
   Kryptera inte zip-filen (som standard krypteras den med ett lösenord som du anger i början av körningen).
   Använd bara om resultatet inte lämnar datorn.
@@ -118,6 +121,7 @@ param(
     [switch]$HidePersonalData,
     [switch]$KeepLogin,
     [switch]$NoZip,
+    [switch]$Anonymize,
     [switch]$NoEncrypt,
     [System.Security.SecureString]$ZipPassword,
     [switch]$Plain,
@@ -142,6 +146,17 @@ $BoundParams = @{}
 foreach ($k in $PSBoundParameters.Keys) { $BoundParams[$k] = $PSBoundParameters[$k] }
 # Lösenordet ska aldrig skickas vidare på kommandoraden eller skrivas i "kör om"-kommandot.
 [void]$BoundParams.Remove('ZipPassword')
+# Eget standardtema utan flagga: en rad med temats namn i %USERPROFILE%\.rapportkit\brand.txt (se branding\README.md).
+if (-not $PSBoundParameters.ContainsKey('Brand') -and -not $BrandPath) {
+    try {
+        $brandFile = Join-Path $env:USERPROFILE '.rapportkit\brand.txt'
+        if (Test-Path -LiteralPath $brandFile) {
+            $brandName = ([string](Get-Content -LiteralPath $brandFile -TotalCount 1)).Trim()
+            if ($brandName -match '^[A-Za-z0-9_-]+$') { $Brand = $brandName }
+        }
+    }
+    catch { }
+}
 
 $ScriptRoot = Split-Path -Parent $PSCommandPath
 $ToolsDir = Join-Path $ScriptRoot 'tools'        # används bara för offline-bundle
@@ -149,7 +164,7 @@ $TotalSteps = 10
 # Governance Visualizer hämtas som en fast version (den som testats). Ändras med flit, inte av misstag.
 $GvVersion = '6.7.2'
 $GvUrl = "https://github.com/Azure/Azure-Governance-Visualizer/archive/refs/tags/$GvVersion.zip"
-$KitVersion = '1.0.9'
+$KitVersion = '1.1.0'
 
 # Testade (pinnade) verktygsversioner, och kontrollsummor (SHA256) för de zip-filer som hämtas direkt. Då får kunden
 # samma verktyg som vi har testat, och en ändrad fil upptäcks. Verktygen installerade via winget kontrolleras av winget
@@ -902,6 +917,13 @@ try {
         Write-Ok 'Lösenord för zip-filen är valt'
     }
 
+    # Anonymiserad version av rapporten (för demo eller delning). Frågas bara interaktivt; -Yes betyder "nej" här.
+    if (-not $Anonymize -and -not $Yes) {
+        Write-Host ''
+        try { if (Read-YesNo 'Vill du även skapa en anonymiserad version av rapporten (för demo eller delning, namn och ID:n byts mot alias)?' $false) { $Anonymize = [switch]$true; $BoundParams['Anonymize'] = [switch]$true } }
+        catch { }
+    }
+
     # Loggar: en rensad logg (rapportkit.log) och hela konsolutskriften inklusive verktygens text (rapportkit-console.log).
     Initialize-Log $RunDir
     try { Start-Transcript -Path (Join-Path $RunDir 'rapportkit-console.log') -Append | Out-Null; $TranscriptStarted = $true } catch { Write-Warn2 'Kunde inte starta konsolloggen (fortsätter ändå).' }
@@ -1537,6 +1559,7 @@ try {
     $facts = [System.Collections.Generic.List[object]]::new()
     $facts.Add(@('Rapport', $reportPath))
     $facts.Add(@('Resultatmapp', $RunDir))
+    if ($Anonymize -and (Test-Path (Join-Path $RunDir 'anonym\rapport.html'))) { $facts.Add(@('Anonym rapport', (Join-Path $RunDir 'anonym\rapport.html'))) }
     if ($zipPath) { $facts.Add(@($(if ($ZipPassword) { 'Krypterad zip' } else { 'Zip' }), $zipPath)); $facts.Add(@('SHA256', $zipHash)) }
     $facts.Add(@('Loggar', 'rapportkit.log (rensad), rapportkit-console.log (allt) och run-summary.json i resultatmappen'))
     $facts.Add(@('Total tid', (Format-Duration ((Get-Date) - $script:RunStart).TotalSeconds)))

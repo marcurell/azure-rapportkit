@@ -15,11 +15,22 @@ branding\
 
 | Hur | Exempel |
 |---|---|
-| Ett tema i `branding\` | `.\Run-Rapportkit.ps1 -Brand molnpasvenska` |
-| En mapp var som helst (t.ex. en kunds eller ett partners tema) | `.\Run-Rapportkit.ps1 -BrandPath D:\teman\mitt-tema` |
+| Ett tema efter namn | `.\Run-Rapportkit.ps1 -Brand molnpasvenska` |
+| En mapp var som helst | `.\Run-Rapportkit.ps1 -BrandPath D:\teman\mitt-tema` |
+| Ett standardtema för den här datorn | skriv temats namn på en rad i `%USERPROFILE%\.rapportkit\brand.txt` |
 
-Anges inget används `molnpasvenska`. Saknas temat eller är något ogiltigt faller rapporten tillbaka på inbyggda
+Ett temanamn letas upp i tur och ordning i: `branding-local\` bredvid scriptet, `%USERPROFILE%\.rapportkit\themes\` och `branding\` (det som följer med kitet).
+`branding-local\` ingår aldrig i repot (se `.gitignore`).
+
+Anges inget används `brand.txt` om den finns, annars `molnpasvenska`. Saknas temat eller är något ogiltigt faller rapporten tillbaka på inbyggda
 standardvärden och scriptet skriver en varning. Det blir aldrig en trasig rapport.
+
+## Teman som inte ska ligga i det publika repot
+
+Ett tema för ett eget företags eller en kunds varumärke bör inte checkas in i ett öppet repo. Lägg det i
+`%USERPROFILE%\.rapportkit\themes\<namn>` (gäller för alla versioner av kitet, så det behöver bara göras en gång per
+dator) och skriv `<namn>` i `%USERPROFILE%\.rapportkit\brand.txt` för att göra det till standard. Mappen kan kopieras
+mellan datorer. Ta bort `brand.txt` för att gå tillbaka till standardtemat.
 
 ## Skapa ett nytt tema
 
@@ -40,6 +51,7 @@ standardvärden och scriptet skriver en varning. Det blir aldrig en trasig rappo
 | `fonts.body`, `fonts.heading` | Typsnittslistor (CSS `font-family`). Typsnitt som inte finns på läsarens dator ersätts av nästa i listan |
 | `footer` | Text i sidfoten |
 | `contact` | `text` och `url` för en kontaktlänk i sidfoten (lämna tomt för att utelämna) |
+| `background` | `file` (bild i temamappen, högst 500 KB) och `opacity` (0 till 1, standard 0,08). Visas bakom innehållet, inte vid utskrift |
 | `customCss` | Filnamn på en CSS-fil i temamappen (valfritt) |
 
 Färger i `colors.*`: `bg`, `surface`, `surfaceAlt`, `border`, `text`, `muted`, `accent` (profilfärg), `accentText`
@@ -58,8 +70,10 @@ Antingen en **ordbild** (text i färger), som Moln på svenska:
 webp, högst 300 KB). Den bäddas in i varje sida, så rapporten är fristående:
 
 ```json
-"logo": { "type": "image", "file": "logo.svg", "alt": "Företagsnamn", "height": 36 }
+"logo": { "type": "image", "file": "logo.svg", "fileDark": "logo-dark.svg", "alt": "Företagsnamn", "height": 36 }
 ```
+
+`fileDark` är valfri: en logga som visas i stället när läsaren använder mörkt läge (till exempel en vit variant).
 
 ## Tänk på
 

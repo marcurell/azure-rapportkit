@@ -225,3 +225,108 @@ Describe 'Write-ReportSite (sidbygge)' {
         (Get-Content (Join-Path $script:RunDir 'rapport.html') -Raw) | Should -Match '--rk-accent:#0969da'
     }
 }
+
+Describe 'Temasökning, mörk logga och bakgrund' {
+    BeforeEach { $script:Warnings.Clear() }
+    It 'hittar ett tema i den egna temamappen (%USERPROFILE%\.rapportkit\themes)' {
+        $old = $env:USERPROFILE
+        try {
+            $env:USERPROFILE = Join-Path $TestDrive 'profil'
+            $dir = Join-Path $env:USERPROFILE '.rapportkit\themes\minegen'
+            New-Item -ItemType Directory -Force $dir | Out-Null
+            '{ "name": "Mitt eget" }' | Set-Content (Join-Path $dir 'theme.json') -Encoding utf8
+            $t = Get-BrandTheme 'minegen' $null
+            $t.Data.name | Should -Be 'Mitt eget'
+            $t.Source | Should -Be $dir
+        }
+        finally { $env:USERPROFILE = $old }
+    }
+    It 'branding-local bredvid scriptet går före branding\' {
+        $local = Join-Path $script:ScriptRoot 'branding-local\tmp-test-tema'
+        try {
+            New-Item -ItemType Directory -Force $local | Out-Null
+            '{ "name": "Lokalt" }' | Set-Content (Join-Path $local 'theme.json') -Encoding utf8
+            (Get-BrandTheme 'tmp-test-tema' $null).Data.name | Should -Be 'Lokalt'
+        }
+        finally { Remove-Item $local -Recurse -Force -ErrorAction SilentlyContinue; Remove-Item (Join-Path $script:ScriptRoot 'branding-local') -Force -ErrorAction SilentlyContinue }
+    }
+    It 'bäddar in en separat logga för mörkt läge' {
+        $dir = Join-Path $TestDrive 'darklogo'; New-Item -ItemType Directory $dir | Out-Null
+        '<svg xmlns="http://www.w3.org/2000/svg" width="10" height="10"/>' | Set-Content (Join-Path $dir 'l.svg')
+        '<svg xmlns="http://www.w3.org/2000/svg" width="12" height="12"/>' | Set-Content (Join-Path $dir 'd.svg')
+        '{ "name": "Mörk", "logo": { "type": "image", "file": "l.svg", "fileDark": "d.svg", "alt": "X" } }' | Set-Content (Join-Path $dir 'theme.json') -Encoding utf8
+        $html = Get-LogoHtml (Get-BrandTheme $null $dir)
+        $html | Should -Match 'rk-l-light'
+        $html | Should -Match 'rk-l-dark'
+        $script:Warnings.Count | Should -Be 0
+    }
+    It 'lägger in en bakgrundsbild i CSS och varnar om filen saknas' {
+        $dir = Join-Path $TestDrive 'bg'; New-Item -ItemType Directory $dir | Out-Null
+        [IO.File]::WriteAllBytes((Join-Path $dir 'b.png'), [byte[]](1..50))
+        '{ "name": "Bg", "background": { "file": "b.png", "opacity": 0.2 } }' | Set-Content (Join-Path $dir 'theme.json') -Encoding utf8
+        (New-ThemeCss (Get-BrandTheme $null $dir)) | Should -Match 'body::before\{content:"";position:fixed.*data:image/png;base64,.*opacity:0\.2'
+        '{ "name": "Bg2", "background": { "file": "finns-inte.png" } }' | Set-Content (Join-Path $dir 'theme.json') -Encoding utf8
+        $script:Warnings.Clear()
+        (New-ThemeCss (Get-BrandTheme $null $dir)) | Should -Not -Match 'body::before'
+        ($script:Warnings -join ' ') | Should -Match 'bakgrundsbild'
+    }
+}
+
+Describe 'Anonymisering' {
+    BeforeAll {
+        $script:RunDir = Join-Path $TestDrive 'anon'
+        $script:Dirs = @{}
+        foreach ($n in 'azqr', 'azgovviz', 'maester', 'portal') { $script:Dirs[$n] = Join-Path $script:RunDir $n; New-Item -ItemType Directory -Force $script:Dirs[$n] | Out-Null }
+        "Validated Using,Source,Category,Impact,Resource Type,Recommendation,Recommendation Id,Subscription Id,Subscription Name,Resource Group,Resource Name`nARG,APRL,Security,High,Microsoft.Web/sites,Använd HTTPS,r1,11111111-2222-3333-4444-555555555555,Kundbolaget Produktion,rg-hemlig,app-kundnamn-01" | Set-Content (Join-Path $script:Dirs.azqr 'azqr_x.impacted.csv') -Encoding utf8
+        "Subscription Id,Resource Group,Location,Resource Type,Resource Name`n11111111-2222-3333-4444-555555555555,rg-hemlig,westeurope,microsoft.web/sites,app-kundnamn-01" | Set-Content (Join-Path $script:Dirs.azqr 'azqr_x.inventory.csv') -Encoding utf8
+        "Prenumeration,Manad,Kostnad,Valuta`nKundbolaget Produktion,2026-10,150,SEK" | Set-Content (Join-Path $script:Dirs.portal 'kostnad.csv') -Encoding utf8
+        $script:TenantId = 'aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee'; $script:Period = '2026-10'
+        $script:KitVersion = 'test'; $script:Pins = @{ Azqr = '1'; Maester = '1'; Pester = '1'; AzAccounts = '1' }; $script:GvVersion = '6'
+        $script:HidePersonalData = $false; $script:LatestTools = $false
+        $script:Status = [ordered]@{ azqr = @{ State = 'OK'; Note = '' } }
+        $script:RunStart = Get-Date
+        $script:Brand = 'neutral'; $script:BrandPath = $null
+        $script:Anonymize = $true
+        $script:Warnings.Clear()
+        Write-ReportSite | Out-Null
+    }
+    AfterAll { $script:Anonymize = $false }
+
+    It 'bygger anonyma sidor i anonym\ och låter den vanliga rapporten vara orörd' {
+        foreach ($f in 'rapport.html', 'rapport-resurser.html', 'rapport-komplett.html') { Test-Path (Join-Path $script:RunDir "anonym\$f") | Should -BeTrue }
+        (Get-PageText 'rapport-resurser.html') | Should -Match 'app-kundnamn-01'
+    }
+    It 'byter ut resurs-, resursgrupps- och prenumerationsnamn samt ID:n' {
+        $all = ''
+        foreach ($f in Get-ChildItem (Join-Path $script:RunDir 'anonym') -Filter '*.html') { $all += [System.Web.HttpUtility]::HtmlDecode((Get-Content $f.FullName -Raw)) }
+        $all | Should -Not -Match 'app-kundnamn-01'
+        $all | Should -Not -Match 'rg-hemlig'
+        $all | Should -Not -Match 'Kundbolaget'
+        $all | Should -Not -Match 'aaaaaaaa-bbbb'
+        $all | Should -Not -Match '11111111-2222'
+        $all | Should -Match 'Resurs 1'
+        $all | Should -Match 'anonymiserad'
+    }
+    It 'samma namn ger alltid samma alias, och olika namn olika alias' {
+        Register-AnonData @{ GvRoles = @([pscustomobject]@{ ObjectType = 'User'; ObjectDisplayName = 'Kalle Testsson'; ObjectSignInName = 'kalle@kund.se' }, [pscustomobject]@{ ObjectType = 'User'; ObjectDisplayName = 'Lisa Provsson'; ObjectSignInName = 'lisa@kund.se' }) }
+        $a = [System.Web.HttpUtility]::HtmlDecode((ConvertTo-AnonymousHtml '<td>Kalle Testsson</td><td>kalle@kund.se</td><td>Lisa Provsson</td><td>Kalle Testsson</td>'))
+        $a | Should -Not -Match 'Kalle|Lisa|kund\.se'
+        ([regex]::Matches($a, 'Användare 1')).Count | Should -Be 2
+        $a | Should -Match 'Användare 2'
+        $a | Should -Match 'användare1@exempel\.invalid'
+    }
+    It 'byter ut e-post, GUID och onmicrosoft-adresser som inte samlats in, men rör inte taggar' {
+        Register-AnonData @{}
+        $a = ConvertTo-AnonymousHtml '<a class="pill high" href="x.html">okänd@firma.com, 12345678-1234-1234-1234-123456789abc, bolag.onmicrosoft.com</a>'
+        $a | Should -Match '<a class="pill high" href="x\.html">'
+        $a | Should -Not -Match 'firma\.com|12345678-1234|bolag\.onmicrosoft'
+        $a | Should -Match 'exempel\.invalid'
+    }
+    It 'ersätter länkar till verktygens egna rapporter med text' {
+        Register-AnonData @{}
+        $a = [System.Web.HttpUtility]::HtmlDecode((ConvertTo-AnonymousHtml (New-ExtLink 'azgovviz/AzGovViz_x.html' 'Governance Visualizer')))
+        $a | Should -Not -Match 'href='
+        $a | Should -Match 'ingår inte i den anonyma versionen'
+        (ConvertTo-AnonymousHtml (New-ExtLink 'https://learn.microsoft.com/x' 'Docs')) | Should -Match 'href="https://learn.microsoft.com/x"'
+    }
+}
