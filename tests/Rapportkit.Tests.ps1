@@ -179,3 +179,20 @@ Describe 'Pinnade versioner i scriptet' {
         $src | Should -Match "GovVizSha256\s*=\s*'[0-9A-F]{64}'"
     }
 }
+
+Describe 'Azure CLI utan winget och valfri kryptering' {
+    BeforeAll { $script:Src = Get-Content $script:ScriptPath -Raw }
+    It 'installerar Azure CLI via signerad MSI när winget saknas eller misslyckas' {
+        $script:Src | Should -Match 'function Install-AzureCli'
+        $script:Src | Should -Match 'Get-AuthenticodeSignature'
+        $script:Src | Should -Match "O=Microsoft Corporation"
+        $script:Src | Should -Match "else \{ Install-AzureCli \}"
+    }
+    It 'förkontrollen kallar inte saknat winget för ett fel (Azure CLI kan hämtas ändå)' {
+        $script:Src | Should -Not -Match "Add-Check 'SAKNAS' 'winget'"
+    }
+    It 'frågar om kryptering innan lösenordet, och -Yes betyder ja' {
+        $script:Src | Should -Match 'Vill du kryptera resultatpaketet'
+        $script:Src | Should -Match '-not \$NoEncrypt -and -not \$ZipPassword -and -not \$Yes'
+    }
+}

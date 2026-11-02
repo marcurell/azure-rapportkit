@@ -164,7 +164,7 @@ $TotalSteps = 10
 # Governance Visualizer hämtas som en fast version (den som testats). Ändras med flit, inte av misstag.
 $GvVersion = '6.7.2'
 $GvUrl = "https://github.com/Azure/Azure-Governance-Visualizer/archive/refs/tags/$GvVersion.zip"
-$KitVersion = '1.1.0'
+$KitVersion = '1.1.1'
 
 # Testade (pinnade) verktygsversioner, och kontrollsummor (SHA256) för de zip-filer som hämtas direkt. Då får kunden
 # samma verktyg som vi har testat, och en ändrad fil upptäcks. Verktygen installerade via winget kontrolleras av winget
@@ -739,6 +739,39 @@ function Install-WithWinget([string]$Name, [string]$Id, [string]$Command, [strin
     Write-Ok "$Name installerad"
 }
 
+# Installerar Azure CLI: först med winget om det finns, annars (eller om winget inte lyckas) genom att hämta Microsofts
+# installationsfil (MSI) från https://aka.ms/installazurecliwindows, kontrollera att den är signerad av Microsoft och köra
+# den tyst. MSI-installationen ber om administratörsgodkännande (UAC): välj Ja.
+function Install-AzureCli {
+    $manual = 'https://aka.ms/installazurecliwindows'
+    if (Test-Cmd winget) {
+        try { Install-WithWinget 'Azure CLI' 'Microsoft.AzureCLI' 'az' $manual; return }
+        catch { Write-Warn2 "winget kunde inte installera Azure CLI ($($_.Exception.Message)). Provar installationsfilen från Microsoft." }
+    }
+    else { Write-Warn2 'winget finns inte på den här datorn. Azure CLI hämtas i stället som installationsfil (MSI) från Microsoft.' }
+    $msi = Join-Path $env:TEMP 'azure-cli-rapportkit.msi'
+    try {
+        Get-Download $manual $msi 10MB
+        $sig = Get-AuthenticodeSignature -FilePath $msi
+        if ($sig.Status -ne 'Valid' -or $sig.SignerCertificate.Subject -notmatch 'O=Microsoft Corporation') {
+            Fail ('Installationsfilen för Azure CLI är inte signerad av Microsoft (signaturstatus: {0}).' -f $sig.Status) "Installera Azure CLI manuellt ($manual) och kör om scriptet."
+        }
+        Write-Ok 'Installationsfilen är signerad av Microsoft'
+        Write-Todo 'Godkänn installationen i fönstret som öppnas (Ja/Yes vid administratörsfrågan). Installationen tar någon minut.'
+        $p = Start-Process -FilePath 'msiexec.exe' -ArgumentList @('/i', ('"{0}"' -f $msi), '/qn', '/norestart') -Verb RunAs -Wait -PassThru
+        if ($p.ExitCode -notin 0, 3010) { Fail "Installationen av Azure CLI misslyckades (msiexec slutkod $($p.ExitCode))." "Installera Azure CLI manuellt ($manual), öppna ett NYTT PowerShell-fönster och kör om scriptet." }
+    }
+    catch [System.ComponentModel.Win32Exception] {
+        Fail 'Installationen av Azure CLI avbröts (administratörsgodkännande nekades eller blockeras av datorns regler).' "Be IT installera Azure CLI ($manual), öppna ett NYTT PowerShell-fönster och kör om scriptet."
+    }
+    finally { Remove-Item $msi -Force -ErrorAction SilentlyContinue }
+    Update-SessionPath
+    $wbin = Join-Path $env:ProgramFiles 'Microsoft SDKs\Azure\CLI2\wbin'
+    if (-not (Test-Cmd az) -and (Test-Path (Join-Path $wbin 'az.cmd'))) { $env:Path = "$wbin;$env:Path" }
+    if (-not (Test-Cmd az)) { Fail 'Azure CLI installerades men gick inte att hitta.' "Öppna ett NYTT PowerShell-fönster och kör om scriptet (installationen är då klar). Annars: $manual" }
+    Write-Ok 'Azure CLI installerad'
+}
+
 # Hämtar en PowerShell-modul till vår egen modulmapp ($ModDir) och kontrollerar att den går att hitta.
 # Egen mapp används för att undvika problem när Dokument är omdirigerat till OneDrive.
 # $MinVersion/$MaxVersion = godkänt intervall för redan installerade versioner (max räknas som "lägre än"). Finns ingen
@@ -893,6 +926,13 @@ try {
 
     # Lösenord för zip-filen: frågas direkt, innan den långa körningen, så att ett felskrivet eller för kort lösenord inte
     # upptäcks först efteråt. Frågan sker före konsolloggen startar. Lösenordet sparas aldrig i någon fil eller logg.
+    # Kryptering är valfritt: först en ja/nej-fråga (-Yes betyder ja), sedan lösenordet. Nej ger en vanlig zip.
+    if (-not $NoZip -and -not $NoEncrypt -and -not $ZipPassword -and -not $Yes) {
+        Write-Host ''
+        $encrypt = $true
+        try { $encrypt = [bool](Read-YesNo 'Vill du kryptera resultatpaketet (zip-filen) med ett lösenord? Rekommenderas om det ska skickas vidare.' $true) } catch { }
+        if (-not $encrypt) { $NoEncrypt = [switch]$true; $BoundParams['NoEncrypt'] = [switch]$true }
+    }
     if (-not $NoZip -and -not $NoEncrypt) {
         . (Join-Path $ScriptRoot 'lib\Crypto.ps1')
         if (-not $ZipPassword) {
@@ -948,7 +988,7 @@ try {
         $need = [System.Collections.Generic.List[string]]::new()
         $wingetNeeded = $false
         # Azure CLI behövs alltid: inloggning, rollkontroll, azqr och Defender/kostnadsdata.
-        if (-not (Test-Cmd az)) { $need.Add('Azure CLI (winget)'); $wingetNeeded = $true }
+        if (-not (Test-Cmd az)) { $need.Add('Azure CLI (winget eller MSI från Microsoft)'); $wingetNeeded = $true }
         if (-not $SkipAzqr) {
             if (-not (Test-Cmd azqr) -and -not (Get-ChildItem (Join-Path $env:LOCALAPPDATA 'azqr') -Recurse -Filter 'azqr.exe' -ErrorAction SilentlyContinue)) { $need.Add('azqr (winget/GitHub)'); $wingetNeeded = $true }
         }
@@ -971,13 +1011,15 @@ try {
         # winget behövs för Azure CLI och azqr (azqr har en reservväg via GitHub).
         if ($wingetNeeded -and -not $NoInstall -and -not $Offline) {
             if (Test-Cmd winget) { Add-Check 'OK' 'winget' 'finns' }
-            else { Add-Check 'SAKNAS' 'winget' 'finns inte: Azure CLI måste installeras manuellt (https://aka.ms/installazurecliwindows)' }
+            elseif (-not (Test-Cmd az)) { Add-Check 'INFO' 'winget' 'finns inte: Azure CLI hämtas i stället som installationsfil (MSI) från Microsoft och kräver administratörsgodkännande (UAC)' }
+            else { Add-Check 'INFO' 'winget' 'finns inte (azqr hämtas direkt från GitHub i stället)' }
         }
 
         # Nätverk: det som behövs för nedladdning, och det som behövs för inloggning och körning.
         $endpoints = @()
         if ($need.Count -and -not $Offline -and -not $NoInstall) {
             if (@($need -match 'GitHub|winget').Count) { $endpoints += , @('github.com', 'https://github.com', 'hämtar Governance Visualizer/azqr') }
+            if (@($need -match 'MSI').Count -and -not (Test-Cmd winget)) { $endpoints += , @('aka.ms', 'https://aka.ms', 'hämtar Azure CLI') }
             if (@($need -match 'PSGallery').Count) { $endpoints += , @('www.powershellgallery.com', 'https://www.powershellgallery.com', 'hämtar PowerShell-moduler') }
         }
         $endpoints += , @('login.microsoftonline.com', 'https://login.microsoftonline.com', 'inloggning')
@@ -1026,7 +1068,7 @@ try {
         try {
             if (Test-Cmd az) { Write-Ok 'Azure CLI finns redan' }
             elseif ($NoInstall) { Fail 'Azure CLI saknas (-NoInstall är satt).' 'Installera Azure CLI (https://aka.ms/installazurecliwindows) och kör om.' }
-            else { Install-WithWinget 'Azure CLI' 'Microsoft.AzureCLI' 'az' 'https://aka.ms/installazurecliwindows' }
+            else { Install-AzureCli }
 
             $cur = az account show --query tenantId -o tsv 2>$null
             $azWasLoggedIn = ($cur -eq $TenantId)        # fanns inloggningen redan? Då loggar vi inte ut den i slutet.

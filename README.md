@@ -21,10 +21,10 @@ Scriptet **skriver inget i Azure-resurser eller i Entra-konfigurationen**. Det g
 $dest = Join-Path $env:USERPROFILE 'rapportkit-kit'
 $zip  = Join-Path $env:TEMP 'azure-rapportkit.zip'
 New-Item -ItemType Directory -Force $dest | Out-Null
-Invoke-WebRequest 'https://github.com/marcurell/azure-rapportkit/archive/refs/tags/v1.1.0.zip' -OutFile $zip
+Invoke-WebRequest 'https://github.com/marcurell/azure-rapportkit/archive/refs/tags/v1.1.1.zip' -OutFile $zip
 Expand-Archive $zip $dest -Force
 Get-ChildItem $dest -Recurse | Unblock-File
-$script = Join-Path $dest 'azure-rapportkit-1.1.0\Run-Rapportkit.ps1'
+$script = Join-Path $dest 'azure-rapportkit-1.1.1\Run-Rapportkit.ps1'
 $arg = '-NoExit -ExecutionPolicy Bypass -File "' + $script + '"'
 Start-Process powershell -ArgumentList $arg
 ```
@@ -69,7 +69,7 @@ Allt hamnar i `<resultatmapp>\<år-månad>\`:
 | `rapportkit-console.log` | Hela konsolutskriften inklusive verktygens text (felsökning; tas inte med i zippen) |
 | `run-summary.json` | Maskinläsbar sammanfattning: versioner, tid per steg, status, varningar, slutkod |
 
-Utanför mappen: `rapportkit_<tenant>_<år-månad>.zip.rkenc` med en `.sha256`-fil, så att mottagaren kan kontrollera att filen kommit fram oförändrad (stäng av med `-NoZip`). Filen är **lösenordskrypterad** (AES-256): scriptet frågar efter ett lösenord (minst 12 tecken, bekräftas två gånger) i början av körningen. Den som kör skickar filen och lösenordet på **olika vägar** (till exempel filen via e-post och lösenordet via SMS). Mottagaren packar upp med `Unprotect-Rapportkit.ps1` (se nedan). Mappen med okrypterade resultat ligger kvar på kundens dator och bör tas bort när uppdraget är klart. `-NoEncrypt` ger en vanlig zip (bara om resultatet inte lämnar datorn).
+Utanför mappen: `rapportkit_<tenant>_<år-månad>.zip.rkenc` med en `.sha256`-fil, så att mottagaren kan kontrollera att filen kommit fram oförändrad (stäng av med `-NoZip`). Kryptering är **valfri**: scriptet frågar i början om paketet ska krypteras, och svarar du ja är filen **lösenordskrypterad** (AES-256) med ett lösenord du anger (minst 12 tecken, bekräftas två gånger). Svarar du nej (eller använder `-NoEncrypt`) blir det en vanlig `.zip`. Den som kör skickar filen och lösenordet på **olika vägar** (till exempel filen via e-post och lösenordet via SMS). Mottagaren packar upp med `Unprotect-Rapportkit.ps1` (se nedan). Mappen med okrypterade resultat ligger kvar på kundens dator och bör tas bort när uppdraget är klart. `-NoEncrypt` ger en vanlig zip (bara om resultatet inte lämnar datorn).
 
 ### Packa upp ett krypterat paket
 
@@ -132,7 +132,7 @@ Har kontot bara åtkomst till en subscription faller Governance Visualizer på b
 1. **Förberedelser**: tenant-ID, resultatmappar, loggfil.
 2. **Förkontroll**: kontrollerar verktyg, nätverk (GitHub, PowerShell Gallery, inloggning, Azure, Graph), diskutrymme och om frågor kan besvaras, innan något hämtas. Saknas något visas det tydligt och du väljer om du vill fortsätta ändå.
 3. **Azure CLI, inloggning och rollkontroll**: installerar Azure CLI om det saknas, loggar in och kontrollerar kontots roller (Azure och Entra). Saknas roller får du instruktionen och väljer att avsluta eller fortsätta.
-4. **Beroenden**: hämtar det som saknas, i **fasta, testade versioner**. PowerShell 7 och azqr via winget (azqr annars direkt från GitHub), Governance Visualizer som zip från GitHub och moduler från PowerShell Gallery till `<resultatmapp>\_modules`. Zip-filerna kontrolleras mot SHA256-kontrollsummor, och en ändrad fil stoppar körningen (se `-AllowUnverified`).
+4. **Beroenden**: hämtar det som saknas, i **fasta, testade versioner**. PowerShell 7 och azqr via winget (azqr annars direkt från GitHub), Azure CLI via winget eller, om winget saknas, som signerad installationsfil (MSI) direkt från Microsoft (kräver administratörsgodkännande), Governance Visualizer som zip från GitHub och moduler från PowerShell Gallery till `<resultatmapp>\_modules`. Zip-filerna kontrolleras mot SHA256-kontrollsummor, och en ändrad fil stoppar körningen (se `-AllowUnverified`).
 5. **Inloggning**: Az PowerShell och valfritt Microsoft Graph. Därefter kontrolleras om kontot kan läsa management group som Governance Visualizer startar på.
 6. **Governance Visualizer**
 7. **azqr**

@@ -37,7 +37,7 @@ Använder ni Privileged Identity Management (PIM): aktivera rollerna innan körn
 
 Scriptet skriver inte i era Azure-resurser. Det gör däremot följande:
 
-1. **Installerar verktyg på datorn** som kör det: PowerShell 7, Azure CLI och azqr (via winget), Azure Governance Visualizer (hämtas som zip från GitHub) samt PowerShell-moduler (Az.Accounts, Maester, Pester) från PowerShell Gallery. Versionerna är fastlåsta till de som är testade, och nedladdade zip-filer kontrolleras mot kontrollsumma (SHA256).
+1. **Installerar verktyg på datorn** som kör det: PowerShell 7, Azure CLI och azqr (via winget; Azure CLI hämtas annars som signerad installationsfil från Microsoft och kräver administratörsgodkännande), Azure Governance Visualizer (hämtas som zip från GitHub) samt PowerShell-moduler (Az.Accounts, Maester, Pester) från PowerShell Gallery. Versionerna är fastlåsta till de som är testade, och nedladdade zip-filer kontrolleras mot kontrollsumma (SHA256).
 2. **Skapar inloggningssessioner.** De syns i Entra ID:s inloggningsloggar och i Azures aktivitetsloggar. Scriptet loggar ut de sessioner det själv skapade när det är klart (om inte annat valts).
 3. **Maester kräver ett godkännande.** Första gången måste en Global Administrator godkänna läsbehörigheter för *Microsoft Graph Command Line Tools* (admin consent). Det är en ändring i tenanten. Hoppar ni över Maester behövs inget godkännande.
 4. **Sparar filer lokalt** i den mapp ni väljer, och en zip-fil av resultatet.
@@ -69,7 +69,7 @@ Rapportens utseende (färger, logga, sidfot) styrs av ett tema som kan bytas, se
 ## Hur resultatet lämnas över
 
 - Scriptet skapar en zip-fil med en tillhörande kontrollsumma (`.sha256`) så att mottagaren kan kontrollera att filen inte ändrats.
-- Scriptet frågar efter ett **lösenord** (minst 12 tecken) i början av körningen och krypterar zip-filen med det (AES-256). Filen heter `rapportkit_<tenant>_<period>.zip.rkenc`. Skicka filen och lösenordet **på olika vägar** (till exempel filen via e-post och lösenordet via SMS eller telefon). Lösenordet sparas inte någonstans av scriptet.
+- Scriptet frågar i början om zip-filen ska krypteras. Svarar ni ja anger ni ett **lösenord** (minst 12 tecken) och filen krypteras med det (AES-256); svarar ni nej blir det en vanlig zip. Filen heter `rapportkit_<tenant>_<period>.zip.rkenc`. Skicka filen och lösenordet **på olika vägar** (till exempel filen via e-post och lösenordet via SMS eller telefon). Lösenordet sparas inte någonstans av scriptet.
 - Mappen med de okrypterade resultaten ligger kvar på datorn som körde scriptet. Ta bort den när uppdraget är klart.
 - Scriptet skickar inget resultat någonstans själv.
 
