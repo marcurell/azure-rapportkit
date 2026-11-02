@@ -1,23 +1,24 @@
 ﻿<#
-  Anonymisering av rapportsidorna (för demo, utbildning eller delning).
+  Anonymization of the report pages (for demos, training or sharing).
 
-  Den vanliga rapporten ändras aldrig. Med -Anonymize (eller svaret "ja" på frågan i början) byggs dessutom en andra
-  uppsättning sidor i mappen anonym\ där namn, e-postadresser och ID:n har bytts ut mot alias.
+  The normal report is never changed. With -Anonymize (or the answer "yes" to the question at the start) a second set of
+  pages is built in the folder anonym\ where names, e-mail addresses and IDs are replaced by aliases.
 
-  Så här går det till:
-    1. Namn samlas in från verktygens resultat (användare, grupper, tjänsteprinciper, prenumerationer, management groups,
-       resursgrupper, resurser) och får alias som "Användare 3" eller "Prenumeration 1". Samma namn får alltid samma alias.
-    2. I varje sida byts de insamlade namnen ut, men bara i sidans text (aldrig i HTML-taggar eller attribut).
-    3. Därefter byts alla GUID, e-postadresser och *.onmicrosoft.com-adresser ut, även sådana som inte samlats in.
-    4. Länkar till verktygens egna rapporter tas bort (de innehåller riktiga namn och ingår inte i den anonyma versionen).
+  How it works:
+    1. Names are collected from the tool results (users, groups, service principals, subscriptions, management groups,
+       resource groups, resources) and get aliases such as "User 3" or "Subscription 1" (the words come from the language
+       pack). The same name always gets the same alias.
+    2. In every page the collected names are replaced, but only in the text of the page (never in HTML tags or attributes).
+    3. After that all GUIDs, e-mail addresses and *.onmicrosoft.com addresses are replaced, also those that were not collected.
+    4. Links to the tools' own reports are removed (they contain real names and are not part of the anonymous version).
 
-  Begränsningar (tas upp i rapporten): fritext som inte ligger i de insamlade kolumnerna, till exempel egna policynamn,
-  taggvärden och namn som är kortare än 4 tecken, byts inte ut. Titta igenom den anonyma versionen innan den delas.
+  Limitations (stated in the report): free text outside the collected columns, for example custom policy names, tag
+  values and names shorter than 4 characters, is not replaced. Read through the anonymous version before sharing it.
 #>
 
 $script:Anon = $null
 
-# Nollställer och förbereder aliasuppslag.
+# Resets and prepares the alias lookup.
 function Initialize-Anonymizer {
     $script:Anon = @{
         Tokens   = New-Object 'System.Collections.Generic.Dictionary[string,string]' ([StringComparer]::OrdinalIgnoreCase)
@@ -35,13 +36,13 @@ function Get-AnonNumber([string]$Category) {
     $script:Anon.Counters[$Category]
 }
 
-# Registrerar ett namn och ger dess alias (samma alias om namnet redan finns). Ger $null om värdet är för kort eller allmänt.
+# Registers a name and returns its alias (the same alias if the name already exists). Returns $null if the value is too short or too common.
 function Add-AnonValue([string]$Category, [string]$Label, $Value, [string]$Alias) {
     $v = ([string]$Value).Trim()
     if ($v.Length -lt 4) { return $null }
-    # Allmänna ord som också används i rapportens egen text byts inte ut, så att rubriker och förklaringar inte förstörs.
+    # Common words that are also used in the report's own text are not replaced, so headings and explanations are not damaged.
     if ($v -in 'Tenant Root Group', 'Unknown', 'None', 'True', 'False', 'Microsoft', 'Reader', 'Owner', 'Contributor', 'Default', 'Azure', 'Security', 'Standard', 'Free', 'Basic', 'High', 'Medium', 'Low') { return $null }
-    if ($v -match '^[0-9a-fA-F]{8}-([0-9a-fA-F]{4}-){3}[0-9a-fA-F]{12}$') { return $null }   # GUID hanteras separat
+    if ($v -match '^[0-9a-fA-F]{8}-([0-9a-fA-F]{4}-){3}[0-9a-fA-F]{12}$') { return $null }   # GUIDs are handled separately
     $existing = $null
     if ($script:Anon.Tokens.TryGetValue($v, [ref]$existing)) { return $existing }
     foreach ($m in $script:Anon.Multi) { if ($m.Value -eq $v) { return $m.Alias } }
@@ -51,7 +52,7 @@ function Add-AnonValue([string]$Category, [string]$Label, $Value, [string]$Alias
     $Alias
 }
 
-# Samlar in det som ska bytas ut ur verktygens resultat ($d från Get-ReportData) och ur miljön.
+# Collects what is to be replaced from the tool results ($d from Get-ReportData) and from the environment.
 function Register-AnonData($d) {
     Initialize-Anonymizer
     $col = {
@@ -59,74 +60,74 @@ function Register-AnonData($d) {
         foreach ($r in @($rows)) { foreach ($n in $names) { if ($null -ne $r -and $r.PSObject.Properties.Name -contains $n) { [void](Add-AnonValue $category $label $r.$n) } } }
     }
 
-    # Rolltilldelningar: användare, grupper och tjänsteprinciper får var sin räknare, och inloggningsnamnet får samma nummer.
+    # Role assignments: users, groups and service principals each get their own counter, and the sign-in name gets the same number.
     foreach ($r in @($d.GvRoles)) {
         if ($null -eq $r) { continue }
         $cat, $label, $mail = switch -Wildcard ([string]$r.ObjectType) {
-            'User' { 'user', 'Användare', 'användare' }
-            'Group' { 'group', 'Grupp', 'grupp' }
-            'ServicePrincipal*' { 'sp', 'Tjänsteprincipal', 'tjansteprincipal' }
-            default { 'obj', 'Objekt', 'objekt' }
+            'User' { 'user', (T 'anon.user'), (T 'anon.mailUser') }
+            'Group' { 'group', (T 'anon.group'), (T 'anon.mailGroup') }
+            'ServicePrincipal*' { 'sp', (T 'anon.sp'), (T 'anon.mailSp') }
+            default { 'obj', (T 'anon.object'), (T 'anon.mailObject') }
         }
         $alias = Add-AnonValue $cat $label $r.ObjectDisplayName
         if ($alias) {
             $n = ($alias -split ' ')[-1]
-            [void](Add-AnonValue $cat $label $r.ObjectSignInName ('{0}{1}@exempel.invalid' -f $mail, $n))
+            [void](Add-AnonValue $cat $label $r.ObjectSignInName ('{0}{1}@{2}' -f $mail, $n, (T 'anon.mailDomain')))
         }
         else { [void](Add-AnonValue $cat $label $r.ObjectSignInName) }
     }
-    & $col $d.GvRoles @('MgName', 'MgParentName') 'mg' 'Management group'
-    & $col $d.GvRoles @('SubscriptionName') 'sub' 'Prenumeration'
-    & $col $d.GvRoles @('RoleAssignmentScopeRG') 'rg' 'Resursgrupp'
-    & $col $d.GvRoles @('RoleAssignmentScopeRes') 'res' 'Resurs'
-    & $col $d.GvPolicies @('MgName', 'MgParentName') 'mg' 'Management group'
-    & $col $d.GvPolicies @('subscriptionName') 'sub' 'Prenumeration'
-    & $col $d.GvSubs @('Subscription') 'sub' 'Prenumeration'
-    foreach ($r in @($d.GvSubs)) { if ($r -and $r.ManagementGroupPath) { foreach ($seg in ([string]$r.ManagementGroupPath -split '[/>|]')) { [void](Add-AnonValue 'mg' 'Management group' $seg) } } }
-    & $col $d.GvResources @('subscriptionName') 'sub' 'Prenumeration'
-    & $col $d.GvResources @('name') 'res' 'Resurs'
-    & $col $d.AzqrImp @('Subscription Name') 'sub' 'Prenumeration'
-    & $col $d.AzqrImp @('Resource Group') 'rg' 'Resursgrupp'
-    & $col $d.AzqrImp @('Resource Name') 'res' 'Resurs'
-    & $col $d.AzqrInv @('Resource Group') 'rg' 'Resursgrupp'
-    & $col $d.AzqrInv @('Resource Name') 'res' 'Resurs'
-    & $col $d.AzqrAdv @('Subscription Name') 'sub' 'Prenumeration'
-    & $col $d.AzqrAdv @('Resource Name') 'res' 'Resurs'
-    foreach ($rows in @($d.Plans, $d.Scores, $d.Ctrls, $d.Recs, $d.Costs)) { & $col $rows @('Prenumeration') 'sub' 'Prenumeration' }
-    foreach ($r in @($d.Recs)) { if ($r -and $r.Resurs) { [void](Add-AnonValue 'res' 'Resurs' (([string]$r.Resurs -split '/')[-1])) } }
+    & $col $d.GvRoles @('MgName', 'MgParentName') 'mg' (T 'anon.mg')
+    & $col $d.GvRoles @('SubscriptionName') 'sub' (T 'anon.subscription')
+    & $col $d.GvRoles @('RoleAssignmentScopeRG') 'rg' (T 'anon.rg')
+    & $col $d.GvRoles @('RoleAssignmentScopeRes') 'res' (T 'anon.resource')
+    & $col $d.GvPolicies @('MgName', 'MgParentName') 'mg' (T 'anon.mg')
+    & $col $d.GvPolicies @('subscriptionName') 'sub' (T 'anon.subscription')
+    & $col $d.GvSubs @('Subscription') 'sub' (T 'anon.subscription')
+    foreach ($r in @($d.GvSubs)) { if ($r -and $r.ManagementGroupPath) { foreach ($seg in ([string]$r.ManagementGroupPath -split '[/>|]')) { [void](Add-AnonValue 'mg' (T 'anon.mg') $seg) } } }
+    & $col $d.GvResources @('subscriptionName') 'sub' (T 'anon.subscription')
+    & $col $d.GvResources @('name') 'res' (T 'anon.resource')
+    & $col $d.AzqrImp @('Subscription Name') 'sub' (T 'anon.subscription')
+    & $col $d.AzqrImp @('Resource Group') 'rg' (T 'anon.rg')
+    & $col $d.AzqrImp @('Resource Name') 'res' (T 'anon.resource')
+    & $col $d.AzqrInv @('Resource Group') 'rg' (T 'anon.rg')
+    & $col $d.AzqrInv @('Resource Name') 'res' (T 'anon.resource')
+    & $col $d.AzqrAdv @('Subscription Name') 'sub' (T 'anon.subscription')
+    & $col $d.AzqrAdv @('Resource Name') 'res' (T 'anon.resource')
+    foreach ($rows in @($d.Plans, $d.Scores, $d.Ctrls, $d.Recs, $d.Costs)) { & $col $rows @('Prenumeration') 'sub' (T 'anon.subscription') }
+    foreach ($r in @($d.Recs)) { if ($r -and $r.Resurs) { [void](Add-AnonValue 'res' (T 'anon.resource') (([string]$r.Resurs -split '/')[-1])) } }
 
-    # Struktur: managementgrupper, prenumerationer, nätverk och noder
+    # Structure: management groups, subscriptions, networks and nodes
     foreach ($r in @($d.MgRows)) {
         if ($null -eq $r) { continue }
-        if ($r.Typ -eq 'Prenumeration') { [void](Add-AnonValue 'sub' 'Prenumeration' $r.Namn) }
-        else { $a = Add-AnonValue 'mg' 'Management group' $r.Namn; [void](Add-AnonValue 'mg' 'Management group' $r.Id $a) }
+        if ($r.Typ -eq 'Prenumeration') { [void](Add-AnonValue 'sub' (T 'anon.subscription') $r.Namn) }
+        else { $a = Add-AnonValue 'mg' (T 'anon.mg') $r.Namn; [void](Add-AnonValue 'mg' (T 'anon.mg') $r.Id $a) }
     }
-    & $col $d.Vnets @('Namn') 'vnet' 'VNet'
-    & $col $d.Vnets @('Resursgrupp') 'rg' 'Resursgrupp'
-    & $col $d.Peerings @('Fran', 'Till') 'vnet' 'VNet'
-    & $col $d.NetNodes @('Namn') 'node' 'Nätverksnod'
-    & $col $d.NetNodes @('Resursgrupp') 'rg' 'Resursgrupp'
+    & $col $d.Vnets @('Namn') 'vnet' (T 'anon.vnet')
+    & $col $d.Vnets @('Resursgrupp') 'rg' (T 'anon.rg')
+    & $col $d.Peerings @('Fran', 'Till') 'vnet' (T 'anon.vnet')
+    & $col $d.NetNodes @('Namn') 'node' (T 'anon.node')
+    & $col $d.NetNodes @('Resursgrupp') 'rg' (T 'anon.rg')
 
-    # Miljön: dator, konto och sökvägar syns på sidan Om körningen.
-    [void](Add-AnonValue 'host' 'Dator' $env:COMPUTERNAME)
-    [void](Add-AnonValue 'acct' 'Konto' $env:USERNAME)
-    foreach ($p in @($RunDir, $OutputRoot, $ScriptRoot, $env:USERPROFILE)) { if ($p) { [void](Add-AnonValue 'path' 'Sökväg' $p '[sökväg]') } }
+    # The environment: computer, account and paths show on the About page.
+    [void](Add-AnonValue 'host' (T 'anon.host') $env:COMPUTERNAME)
+    [void](Add-AnonValue 'acct' (T 'anon.account') $env:USERNAME)
+    foreach ($p in @($RunDir, $OutputRoot, $ScriptRoot, $env:USERPROFILE)) { if ($p) { [void](Add-AnonValue 'path' (T 'anon.pathLabel') $p (T 'anon.pathAlias')) } }
     $script:Anon.Multi = [System.Collections.Generic.List[object]]@($script:Anon.Multi | Sort-Object { $_.Value.Length } -Descending)
 }
 
-# Byter ut innehållet i en textbit (redan avkodad från HTML).
+# Replaces the content of a piece of text (already decoded from HTML).
 function Invoke-AnonText([string]$Text) {
     if ($Text.Length -lt 4) { return $Text }
-    # Resurs-ID:n (/resourceGroups/<namn>, /providers/<leverantör>/<typ>/<namn>) kan innehålla namn som inte samlats in
-    # från någon kolumn: de registreras och byts ut här.
+    # Resource IDs (/resourceGroups/<name>, /providers/<provider>/<type>/<name>) can contain names that were not collected
+    # from any column: they are registered and replaced here.
     $Text = [regex]::Replace($Text, '(?i)(/resourcegroups/)([^/\s<>"]+)', [System.Text.RegularExpressions.MatchEvaluator] {
             param($m)
-            $a = Add-AnonValue 'rg' 'Resursgrupp' $m.Groups[2].Value
+            $a = Add-AnonValue 'rg' (T 'anon.rg') $m.Groups[2].Value
             if ($a) { $m.Groups[1].Value + $a } else { $m.Value }
         })
     $Text = [regex]::Replace($Text, '(?i)(/providers/[^/\s<>"]+/[^/\s<>"]+/)([^/\s<>"]+)', [System.Text.RegularExpressions.MatchEvaluator] {
             param($m)
-            $a = Add-AnonValue 'res' 'Resurs' $m.Groups[2].Value
+            $a = Add-AnonValue 'res' (T 'anon.resource') $m.Groups[2].Value
             if ($a) { $m.Groups[1].Value + $a } else { $m.Value }
         })
     foreach ($m in $script:Anon.Multi) {
@@ -139,16 +140,16 @@ function Invoke-AnonText([string]$Text) {
             $alias = $null
             if ($script:Anon.Tokens.TryGetValue($core, [ref]$alias)) { $alias + $trail } else { $m.Value }
         })
-    # E-postadresser som inte samlats in (men inte de alias som redan satts).
+    # E-mail addresses that were not collected (but not the aliases that were already set).
     $Text = [regex]::Replace($Text, '[\p{L}\p{N}._%+#\-]+@[\p{L}\p{N}.\-]+\.[A-Za-z]{2,}', [System.Text.RegularExpressions.MatchEvaluator] {
             param($m)
-            if ($m.Value -like '*@exempel.invalid') { return $m.Value }
+            if ($m.Value -like ('*@' + (T 'anon.mailDomain'))) { return $m.Value }
             $k = $m.Value.ToLower()
-            if (-not $script:Anon.Emails.ContainsKey($k)) { $script:Anon.Emails[$k] = 'person{0}@exempel.invalid' -f ($script:Anon.Emails.Count + 1) }
+            if (-not $script:Anon.Emails.ContainsKey($k)) { $script:Anon.Emails[$k] = '{0}{1}@{2}' -f (T 'anon.person'), ($script:Anon.Emails.Count + 1), (T 'anon.mailDomain') }
             $script:Anon.Emails[$k]
         })
-    $Text = [regex]::Replace($Text, '(?i)\b[A-Za-z0-9\-]+\.onmicrosoft\.com\b', 'exempel.onmicrosoft.com')
-    # IPv4-adresser och adressrymder (10.0.0.0/16): varje adress får en egen utbytesadress, prefixlängden behålls.
+    $Text = [regex]::Replace($Text, '(?i)\b[A-Za-z0-9\-]+\.onmicrosoft\.com\b', (T 'anon.onmicrosoft'))
+    # IPv4 addresses and address spaces (10.0.0.0/16): every address gets its own replacement address, the prefix length is kept.
     $Text = [regex]::Replace($Text, '(?<![0-9.])(\d{1,3}(?:\.\d{1,3}){3})(/\d{1,2})?(?![0-9.])', [System.Text.RegularExpressions.MatchEvaluator] {
             param($m)
             $ip = $m.Groups[1].Value
@@ -164,13 +165,13 @@ function Invoke-AnonText([string]$Text) {
     $Text
 }
 
-# Anonymiserar ett HTML-stycke: bara textnoder bearbetas, taggar och attribut lämnas orörda. Länkar till filer från
-# verktygen (relativa länkar som öppnas i nytt fönster) ersätts av vanlig text.
+# Anonymizes a piece of HTML: only text nodes are processed, tags and attributes are left alone. Links to files from the
+# tools (relative links that open in a new window) are replaced by plain text.
 function ConvertTo-AnonymousHtml([string]$Html) {
     $Html = [regex]::Replace($Html, '<a href="(?!https?:|#)[^"]*" target="_blank"[^>]*>(.*?)</a>', {
             param($m)
             $inner = [regex]::Replace($m.Groups[1].Value, '<span class="rk-ext"[^>]*>.*?</span>', '')
-            '<span class="muted">{0} (ingår inte i den anonyma versionen)</span>' -f $inner
+            '<span class="muted">{0} ({1})</span>' -f $inner, (Esc (T 'anon.notIncluded'))
         })
     $parts = [regex]::Split($Html, '(<[^>]*>)')
     $sb = [System.Text.StringBuilder]::new()

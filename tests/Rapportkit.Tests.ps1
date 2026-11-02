@@ -1,4 +1,4 @@
-#Requires -Modules @{ ModuleName = 'Pester'; ModuleVersion = '5.0.0' }
+﻿#Requires -Modules @{ ModuleName = 'Pester'; ModuleVersion = '5.0.0' }
 <#
   Enhetstester för de rena hjälpfunktionerna i Run-Rapportkit.ps1. Funktionerna läses ut ur scriptet med parsern (AST),
   så scriptet körs inte (inga inloggningar eller nedladdningar).
@@ -98,7 +98,7 @@ Describe 'Import-CsvChecked' {
         "Pakt,Category`nHigh,Security" | Set-Content $p
         Import-CsvChecked $p @('Impact', 'Category') | Should -BeNullOrEmpty
         $script:Warnings.Count | Should -Be 1
-        $script:Warnings[0] | Should -Match 'saknar kolumnerna: Impact'
+        $script:Warnings[0] | Should -Match 'missing the columns: Impact'
     }
     It 'varnar för en tom fil' {
         $p = Join-Path $TestDrive 'empty.csv'
@@ -114,7 +114,7 @@ Describe 'Get-OutputRootWarnings' {
         try { (Get-OutputRootWarnings 'C:\Users\test\OneDrive\rapportkit') -join ' ' | Should -Match 'OneDrive' } finally { $env:OneDrive = $old }
     }
     It 'varnar för långa sökvägar' {
-        (Get-OutputRootWarnings ('C:\' + ('a' * 100))) -join ' ' | Should -Match 'lång'
+        (Get-OutputRootWarnings ('C:\' + ('a' * 100))) -join ' ' | Should -Match 'is long'
     }
     It 'varnar inte för en vanlig kort mapp' {
         (Get-OutputRootWarnings 'C:\rapportkit').Count | Should -Be 0
@@ -134,7 +134,7 @@ Describe 'Assert-FileHash' {
         $err = $null
         try { Assert-FileHash $script:f ('0' * 64) 'test' } catch { $err = $_.Exception }
         $err | Should -Not -BeNullOrEmpty
-        $err.Data['Fix'] | Should -Match 'kör om|Kör om'
+        $err.Data['Fix'] | Should -Match 'run the script again|Run the script again'
     }
     It 'varnar men fortsätter med -AllowUnverified' {
         $script:AllowUnverified = $true
@@ -192,7 +192,7 @@ Describe 'Azure CLI utan winget och valfri kryptering' {
         $script:Src | Should -Not -Match "Add-Check 'SAKNAS' 'winget'"
     }
     It 'frågar om kryptering innan lösenordet, och -Yes betyder ja' {
-        $script:Src | Should -Match 'Vill du kryptera resultatpaketet'
+        $script:Src | Should -Match 'Do you want to encrypt the result package'
         $script:Src | Should -Match '-not \$NoEncrypt -and -not \$ZipPassword -and -not \$Yes'
     }
 }
@@ -217,6 +217,34 @@ Describe 'Branding: en mapp, ingen flagga' {
         Test-Path (Join-Path $kit.FullName 'tests') | Should -BeFalse
         Test-Path (Join-Path $kit.FullName '.git') | Should -BeFalse
     }
+    It 'Pack-Kit.ps1 -Language skriver rapportspråket i theme.json i zippen (men inte i källmappen) och tar med lang' {
+        $b = Join-Path $TestDrive 'sprakprofil\branding'; New-Item -ItemType Directory -Force $b | Out-Null
+        '{ "name": "Språkprofil", "language": "en" }' | Set-Content (Join-Path $b 'theme.json') -Encoding utf8
+        $zip = Join-Path $TestDrive 'sprak.zip'
+        & (Join-Path $PSScriptRoot '..\Pack-Kit.ps1') -Branding $b -Language sv -Out $zip | Out-Null
+        $dest = Join-Path $TestDrive 'sprak'; Expand-Archive $zip $dest
+        $kit = (Get-ChildItem $dest -Directory | Select-Object -First 1).FullName
+        $theme = Get-Content (Join-Path $kit 'branding\theme.json') -Raw -Encoding UTF8 | ConvertFrom-Json
+        $theme.language | Should -Be 'sv'
+        $theme.name | Should -Be 'Språkprofil'
+        (Get-Content (Join-Path $b 'theme.json') -Raw) | Should -Match '"language": "en"'
+        Test-Path (Join-Path $kit 'lang\sv.psd1') | Should -BeTrue
+        Test-Path (Join-Path $kit 'lang\en.psd1') | Should -BeTrue
+    }
+    It 'Pack-Kit.ps1 -Language lägger till språket i en theme.json som saknar det, och avvisar okänt språk' {
+        $b = Join-Path $TestDrive 'utansprak\branding'; New-Item -ItemType Directory -Force $b | Out-Null
+        '{ "name": "Utan språk" }' | Set-Content (Join-Path $b 'theme.json') -Encoding utf8
+        $zip = Join-Path $TestDrive 'utansprak.zip'
+        & (Join-Path $PSScriptRoot '..\Pack-Kit.ps1') -Branding $b -Language en -Out $zip | Out-Null
+        $dest = Join-Path $TestDrive 'utansprak'; Expand-Archive $zip $dest
+        $kit = (Get-ChildItem $dest -Directory | Select-Object -First 1).FullName
+        (Get-Content (Join-Path $kit 'branding\theme.json') -Raw -Encoding UTF8 | ConvertFrom-Json).language | Should -Be 'en'
+        { & (Join-Path $PSScriptRoot '..\Pack-Kit.ps1') -Branding $b -Language xx -Out (Join-Path $TestDrive 'y.zip') } | Should -Throw '*xx*'
+    }
+    It 'Run-Rapportkit.ps1 har parametern -ReportLanguage' {
+        $ast = [System.Management.Automation.Language.Parser]::ParseFile($script:ScriptPath, [ref]$null, [ref]$null)
+        $ast.ParamBlock.Parameters.Name.VariablePath.UserPath | Should -Contain 'ReportLanguage'
+    }
     It 'Pack-Kit.ps1 avvisar en mapp utan theme.json' {
         $b = Join-Path $TestDrive 'tom'; New-Item -ItemType Directory $b | Out-Null
         { & (Join-Path $PSScriptRoot '..\Pack-Kit.ps1') -Branding $b -Out (Join-Path $TestDrive 'x.zip') } | Should -Throw '*theme.json*'
@@ -232,12 +260,35 @@ Describe 'Kundversion av kitet' {
         $script:KundDir = Join-Path $TestDrive 'kundkit'; Expand-Archive $zip $script:KundDir
         $script:Kit = (Get-ChildItem $script:KundDir -Directory | Select-Object -First 1).FullName
     }
-    It 'innehåller kundens README och guide, inte repots' {
-        (Get-Content (Join-Path $script:Kit 'README.md') -Raw) | Should -Match 'Packa upp|Extrahera alla'
-        (Get-Content (Join-Path $script:Kit 'README.md') -Raw) | Should -Not -Match 'Snabbstart|Pack-Kit'
-        Test-Path (Join-Path $script:Kit 'docs\Kundguide-Azure-Rapportkit.docx') | Should -BeTrue
+    It 'innehåller kundens README och guide på engelska som standard, inte repots' {
+        (Get-Content (Join-Path $script:Kit 'README.md') -Raw) | Should -Match 'Extract All'
+        (Get-Content (Join-Path $script:Kit 'README.md') -Raw) | Should -Not -Match 'Quick start|Pack-Kit'
+        Test-Path (Join-Path $script:Kit 'docs\Azure-Rapportkit-Customer-guide.docx') | Should -BeTrue
+        Test-Path (Join-Path $script:Kit 'docs\Azure-Rapportkit-Kundguide.docx') | Should -BeFalse
         Test-Path (Join-Path $script:Kit 'docs\Anvandarguide-Azure-Rapportkit.docx') | Should -BeFalse
-        Test-Path (Join-Path $script:Kit 'docs\KUNDINFO.md') | Should -BeTrue
+        (Get-Content (Join-Path $script:Kit 'docs\KUNDINFO.md') -Raw) | Should -Match 'information for the customer'
+    }
+    It 'ger svenska kunddokument med Pack-Kit -Language sv, och rapportspråket i theme.json' {
+        $b = Join-Path $TestDrive 'svprofil\branding'; New-Item -ItemType Directory -Force $b | Out-Null
+        '{ "name": "Svprofil" }' | Set-Content (Join-Path $b 'theme.json') -Encoding utf8
+        $zip = Join-Path $TestDrive 'sv.zip'
+        & (Join-Path $PSScriptRoot '..\Pack-Kit.ps1') -Branding $b -Language sv -Out $zip | Out-Null
+        $dest = Join-Path $TestDrive 'svkit'; Expand-Archive $zip $dest
+        $kit = (Get-ChildItem $dest -Directory | Select-Object -First 1).FullName
+        (Get-Content (Join-Path $kit 'README.md') -Raw -Encoding UTF8) | Should -Match 'Extrahera alla'
+        (Get-Content (Join-Path $kit 'docs\KUNDINFO.md') -Raw -Encoding UTF8) | Should -Match 'information till kunden'
+        Test-Path (Join-Path $kit 'docs\Azure-Rapportkit-Kundguide.docx') | Should -BeTrue
+        Test-Path (Join-Path $kit 'docs\Azure-Rapportkit-Customer-guide.docx') | Should -BeFalse
+        (Get-Content (Join-Path $kit 'branding\theme.json') -Raw -Encoding UTF8 | ConvertFrom-Json).language | Should -Be 'sv'
+    }
+    It 'väljer dokumentspråk efter language i theme.json när -Language saknas' {
+        $b = Join-Path $TestDrive 'svtema\branding'; New-Item -ItemType Directory -Force $b | Out-Null
+        '{ "name": "Svtema", "language": "sv" }' | Set-Content (Join-Path $b 'theme.json') -Encoding utf8
+        $zip = Join-Path $TestDrive 'svtema.zip'
+        & (Join-Path $PSScriptRoot '..\Pack-Kit.ps1') -Branding $b -Out $zip | Out-Null
+        $dest = Join-Path $TestDrive 'svtemakit'; Expand-Archive $zip $dest
+        $kit = (Get-ChildItem $dest -Directory | Select-Object -First 1).FullName
+        (Get-Content (Join-Path $kit 'README.md') -Raw -Encoding UTF8) | Should -Match 'Extrahera alla'
     }
     It 'har inga länkar till repot och inga utvecklarverktyg i zippen' {
         foreach ($f in Get-ChildItem $script:Kit -Recurse -File -Include *.md, *.ps1, *.json, *.txt) {
@@ -247,7 +298,7 @@ Describe 'Kundversion av kitet' {
         Test-Path (Join-Path $script:Kit 'tests') | Should -BeFalse
     }
     It 'kunddokumenten i repot nämner inte repot eller Moln på svenska' {
-        foreach ($f in 'docs\kund\README.md', 'docs\KUNDINFO.md') {
+        foreach ($f in 'docs\kund\README.sv.md', 'docs\kund\README.en.md', 'docs\KUNDINFO.sv.md', 'docs\KUNDINFO.en.md') {
             $t = Get-Content (Join-Path $PSScriptRoot "..\$f") -Raw
             $t | Should -Not -Match 'marcurell|github\.com/marcurell|Moln på svenska|molnpasvenska' -Because $f
         }

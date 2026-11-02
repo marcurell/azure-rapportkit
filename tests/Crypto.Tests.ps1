@@ -29,23 +29,23 @@ Describe 'Lösenordskryptering av resultatpaketet' {
         $enc = Join-Path $script:Dir 'c.rkenc'; $out = Join-Path $script:Dir 'c.out'
         Protect-RapportkitFile $script:Plain $enc $script:Pw
         $bad = New-TestSecret 'ett-annat-losenord-999'
-        { Unprotect-RapportkitFile $enc $out $bad } | Should -Throw '*Fel lösenord*'
+        { Unprotect-RapportkitFile $enc $out $bad } | Should -Throw '*Wrong password*'
         Test-Path $out | Should -BeFalse
     }
     It 'upptäcker en ändrad fil' {
         $enc = Join-Path $script:Dir 'd.rkenc'; $out = Join-Path $script:Dir 'd.out'
         Protect-RapportkitFile $script:Plain $enc $script:Pw
         $b = [System.IO.File]::ReadAllBytes($enc); $b[200] = $b[200] -bxor 1; [System.IO.File]::WriteAllBytes($enc, $b)
-        { Unprotect-RapportkitFile $enc $out $script:Pw } | Should -Throw '*ändrats*'
+        { Unprotect-RapportkitFile $enc $out $script:Pw } | Should -Throw '*modified*'
     }
     It 'avvisar filer i fel format' {
         $x = Join-Path $script:Dir 'e.rkenc'
         [System.IO.File]::WriteAllBytes($x, (New-Object byte[] 200))
-        { Unprotect-RapportkitFile $x (Join-Path $script:Dir 'e.out') $script:Pw } | Should -Throw '*filformat*'
+        { Unprotect-RapportkitFile $x (Join-Path $script:Dir 'e.out') $script:Pw } | Should -Throw '*file format*'
     }
     It 'avvisar för kort lösenord vid kryptering' {
         $short = New-TestSecret 'kort'
-        { Protect-RapportkitFile $script:Plain (Join-Path $script:Dir 'f.rkenc') $short } | Should -Throw '*för kort*'
+        { Protect-RapportkitFile $script:Plain (Join-Path $script:Dir 'f.rkenc') $short } | Should -Throw '*too short*'
     }
     It 'Unprotect-Rapportkit.ps1 packar upp ett zip-paket i en mapp' {
         $src = Join-Path $script:Dir 'src'; New-Item -ItemType Directory $src | Out-Null

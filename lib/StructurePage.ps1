@@ -1,15 +1,18 @@
 ﻿<#
-  Rapportsidan Struktur: managementgruppsträd, virtuella nätverk (VNet) med peerings (bild och tabeller), nätverksnoder
-  och automatiska iakttagelser (isolerade nät, ensidiga eller bruten peering, överlappande adressrymder).
+  The Structure report page: management group tree, virtual networks (VNets) with peerings (diagram and tables), network
+  nodes, and automatic observations (isolated networks, one-way or broken peerings, overlapping address spaces).
 
-  Läser CSV-filerna som lib\Structure.ps1 sparat i struktur\, och faller tillbaka på Governance Visualizers data för
-  managementgrupperna om de saknas. Läses in (dot-source) av lib\Report.ps1.
+  Reads the CSV files that lib\Structure.ps1 saved in struktur\, and falls back on Governance Visualizer's data for the
+  management groups if they are missing. Dot-sourced by lib\Report.ps1. All texts come from the language packs (T).
+
+  The CSV files keep their Swedish column names and values (Namn, Typ = 'Managementgrupp' / 'Prenumeration', ...): they
+  are a data format shared with older runs, not report text.
 #>
 
-# Sista delen av ett resurs-ID (namnet). Finns även i lib\Structure.ps1 (som inte alltid är inläst när rapporten byggs).
+# Last part of a resource ID (the name). Also in lib\Structure.ps1 (which is not always loaded when the report is built).
 function Get-IdLeaf([string]$Id) { if ($Id) { ($Id.TrimEnd('/') -split '/')[-1] } else { '' } }
 
-# Läser strukturens CSV-filer till $d (saknas de blir värdena $null).
+# Reads the structure CSV files into $d (the values are $null if they are missing).
 function Read-StructureData($d) {
     $dir = $null
     if ($Dirs -and $Dirs.ContainsKey('struktur')) { $dir = $Dirs['struktur'] }
@@ -25,7 +28,7 @@ function Read-StructureData($d) {
     $d.StructurePresent = [bool]($d.MgRows -or $d.Vnets -or $d.GvSubs)
 }
 
-# Managementgrupper och prenumerationer ur Governance Visualizers CSV, om struktur\ saknas (äldre körningar).
+# Management groups and subscriptions from Governance Visualizer's CSV files, if struktur\ is missing (older runs).
 function Get-MgRowsFromGovViz($d) {
     $rows = [System.Collections.Generic.List[object]]::new()
     $seen = @{}
@@ -46,7 +49,7 @@ function Get-MgRowsFromGovViz($d) {
     , $rows.ToArray()
 }
 
-# --- Trädet --------------------------------------------------------------------------------------------
+# --- The tree ------------------------------------------------------------------------------------------
 
 function Get-MgNodeHtml($Row, $ByParent, $SubRes, [int]$Depth) {
     $id = [string]$Row.Id
@@ -55,8 +58,8 @@ function Get-MgNodeHtml($Row, $ByParent, $SubRes, [int]$Depth) {
     if ($isSub) {
         $cnt = ''
         $k = $id.ToLower()
-        if ($SubRes.ContainsKey($k)) { $cnt = ' &middot; {0} resurser' -f $SubRes[$k] }
-        return ('<li class="sub"><span class="nm">{0}</span><span class="tag">Prenumeration{1}</span></li>' -f (Esc $name), $cnt)
+        if ($SubRes.ContainsKey($k)) { $cnt = ' &middot; ' + (Esc (T 'tree.resources' $SubRes[$k])) }
+        return ('<li class="sub"><span class="nm">{0}</span><span class="tag">{1}{2}</span></li>' -f (Esc $name), (Esc (T 'tree.subscription')), $cnt)
     }
     $kids = @()
     $key = $id.ToLower()
@@ -66,7 +69,7 @@ function Get-MgNodeHtml($Row, $ByParent, $SubRes, [int]$Depth) {
     $inner = (($mgs + $subs) | ForEach-Object { Get-MgNodeHtml $_ $ByParent $SubRes ($Depth + 1) }) -join ''
     $idTag = if ($id -and (($id -replace '[^A-Za-z0-9]', '') -ne ($name -replace '[^A-Za-z0-9]', ''))) { ' &middot; ' + (Esc $id) } else { '' }
     $ul = if ($inner) { '<ul>' + $inner + '</ul>' } else { '' }
-    '<li class="mg"><span class="nm">{0}</span><span class="tag">Managementgrupp{1}</span>{2}</li>' -f (Esc $name), $idTag, $ul
+    '<li class="mg"><span class="nm">{0}</span><span class="tag">{1}{2}</span>{3}</li>' -f (Esc $name), (Esc (T 'tree.mg')), $idTag, $ul
 }
 
 function Get-MgTreeHtml($Rows, $SubRes) {
@@ -83,9 +86,9 @@ function Get-MgTreeHtml($Rows, $SubRes) {
     '<ul class="tree">' + (($roots | ForEach-Object { Get-MgNodeHtml $_ $byParent $SubRes 0 }) -join '') + '</ul>'
 }
 
-# --- Nätverksmodell -----------------------------------------------------------------------------------
+# --- Network model -------------------------------------------------------------------------------------
 
-# IPv4-intervall (start, slut som heltal) för en CIDR. $null för allt annat (till exempel IPv6).
+# IPv4 range (start, end as integers) of a CIDR. $null for anything else (for example IPv6).
 function ConvertTo-CidrRange([string]$Cidr) {
     if ($Cidr -notmatch '^(\d{1,3})\.(\d{1,3})\.(\d{1,3})\.(\d{1,3})/(\d{1,2})$') { return $null }
     $o = @($Matches[1], $Matches[2], $Matches[3], $Matches[4]) | ForEach-Object { [long]$_ }
@@ -97,7 +100,8 @@ function ConvertTo-CidrRange([string]$Cidr) {
     @($start, ($start + $size - 1))
 }
 
-# Bygger modellen: nät med roll, peerings per par, grannar och iakttagelser.
+# Builds the model: networks with a role, peerings per pair, neighbours and observations.
+# Roles are the codes 'Hub', 'Spoke' and 'Isolated' (shown through T 'role.<code>').
 function Get-NetworkModel($d) {
     $vn = @($d.Vnets | Where-Object { $_ })
     $subName = @{}
@@ -105,7 +109,7 @@ function Get-NetworkModel($d) {
     $byId = @{}
     foreach ($v in $vn) { $byId[([string]$v.Id).ToLower()] = $v }
 
-    # Noder som ligger i ett nät (brandväggar, gateways) och peerings med gateway-transit visar att nätet är en hub.
+    # Nodes inside a network (firewalls, gateways) and peerings with gateway transit show that the network is a hub.
     $nodesIn = @{}
     foreach ($n in @($d.NetNodes | Where-Object { $_ -and $_.VnetId })) { $nodesIn[([string]$n.VnetId).ToLower()] = $true }
 
@@ -130,7 +134,7 @@ function Get-NetworkModel($d) {
     $degree = @{}
     foreach ($e in $edges) { foreach ($x in $e.A, $e.B) { if (-not $degree.ContainsKey($x)) { $degree[$x] = 0 }; $degree[$x]++ } }
 
-    # Sammanhängande grupper av nät (komponenter)
+    # Connected groups of networks (components)
     $adj = @{}
     foreach ($e in $edges) {
         foreach ($pair in @(@($e.A, $e.B), @($e.B, $e.A))) {
@@ -147,25 +151,25 @@ function Get-NetworkModel($d) {
         $components.Add($members.ToArray())
     }
 
-    # Roller
+    # Roles
     $maxDeg = @{}
     foreach ($c in $components) { $m = ($c | ForEach-Object { $degree[$_] } | Measure-Object -Maximum).Maximum; foreach ($x in $c) { $maxDeg[$x] = $m } }
-    # En hub har brandvägg/gateway i nätet, eller delar ut gateway-transit till andra nät (den sidan av peeringen har
-    # "tillåt gateway-transit"), eller är det mest kopplade nätet i en grupp med minst tre nät.
+    # A hub has a firewall/gateway in the network, or hands out gateway transit to other networks (that side of the
+    # peering has "allow gateway transit"), or is the most connected network in a group of at least three networks.
     $transitFrom = @{}
     foreach ($p in @($d.Peerings | Where-Object { $_ -and $_.GatewayTransit -eq 'True' })) { $transitFrom[([string]$p.FranId).ToLower()] = $true }
     $role = @{}
     foreach ($v in $vn) {
         $id = ([string]$v.Id).ToLower()
         $deg = 0; if ($degree.ContainsKey($id)) { $deg = $degree[$id] }
-        $r = 'Isolerat'
+        $r = 'Isolated'
         if ($deg -ge 1) { $r = 'Spoke' }
         if ($deg -ge 1 -and ($nodesIn.ContainsKey($id) -or $transitFrom.ContainsKey($id))) { $r = 'Hub' }
         elseif ($deg -ge 2 -and $deg -eq $maxDeg[$id]) { $r = 'Hub' }
         $role[$id] = $r
     }
 
-    # Överlappande adressrymder mellan nät (högst 400 nät, annars hoppas kontrollen över)
+    # Overlapping address spaces between networks (at most 400 networks, otherwise the check is skipped)
     $overlaps = [System.Collections.Generic.List[object]]::new()
     $overlapSkipped = $false
     if ($vn.Count -le 400) {
@@ -183,11 +187,11 @@ function Get-NetworkModel($d) {
     @{ Vnets = $vn; ById = $byId; Edges = $edges; Degree = $degree; Components = @($components); Role = $role; Overlaps = @($overlaps); OverlapSkipped = $overlapSkipped; SubName = $subName; NodesIn = $nodesIn }
 }
 
-# --- Bild: peerings som nätverksdiagram (SVG) ----------------------------------------------------------
+# --- Diagram: peerings as a network diagram (SVG) --------------------------------------------------------
 
 function Get-ShortText([string]$Text, [int]$Max) { if ($Text.Length -gt $Max) { $Text.Substring(0, $Max - 1) + [string][char]0x2026 } else { $Text } }
 
-# En komponent (lista med nät-ID) som SVG: nätet med flest peerings i mitten, de andra i en ring. Högst 13 nät.
+# One component (a list of network IDs) as SVG: the network with most peerings in the middle, the others in a ring. At most 13 networks.
 function Get-PeeringSvg($Members, $Model) {
     $ids = @($Members | Sort-Object { -[int]$Model.Degree[$_] }, { $_ })
     $n = $ids.Count
@@ -203,7 +207,7 @@ function Get-PeeringSvg($Members, $Model) {
     }
     $set = @{}; foreach ($x in $ids) { $set[$x] = $true }
     $sb = [System.Text.StringBuilder]::new()
-    [void]$sb.Append(('<svg class="net-svg" viewBox="0 0 {0} {1}" role="img" aria-label="Peerings mellan virtuella nät. Tabellerna nedan innehåller samma uppgifter." xmlns="http://www.w3.org/2000/svg">' -f $w, $h))
+    [void]$sb.Append(('<svg class="net-svg" viewBox="0 0 {0} {1}" role="img" aria-label="{2}" xmlns="http://www.w3.org/2000/svg">' -f $w, $h, (Esc (T 'net.svgLabel'))))
     foreach ($e in $Model.Edges) {
         if (-not ($set.ContainsKey($e.A) -and $set.ContainsKey($e.B))) { continue }
         $cls = switch ($e.State) { 'bad' { 'net-edge bad' } 'oneway' { 'net-edge warn' } default { 'net-edge' } }
@@ -213,7 +217,7 @@ function Get-PeeringSvg($Members, $Model) {
         $v = $Model.ById[$x]
         $known = $null -ne $v
         $name = if ($known) { $v.Namn } else { Get-IdLeaf $x }
-        $addr = if ($known) { (([string]$v.Adressrymd) -split '\s+')[0] } else { 'okänd (annan prenumeration?)' }
+        $addr = if ($known) { (([string]$v.Adressrymd) -split '\s+')[0] } else { T 'net.unknown' }
         $cls = 'net-node'
         if ($known -and $Model.Role[$x] -eq 'Hub') { $cls += ' hub' }
         if (-not $known) { $cls += ' ext' }
@@ -224,16 +228,18 @@ function Get-PeeringSvg($Members, $Model) {
     $sb.ToString()
 }
 
-# --- Sidan --------------------------------------------------------------------------------------------
+# --- The page ------------------------------------------------------------------------------------------
 
-$script:NodeTypeNames = @{
-    'azurefirewalls' = 'Azure Firewall'; 'virtualnetworkgateways' = 'VNet-gateway (VPN/ExpressRoute)'; 'expressroutecircuits' = 'ExpressRoute-krets'
-    'virtualwans' = 'Virtual WAN'; 'virtualhubs' = 'Virtual WAN-hubb'; 'bastionhosts' = 'Bastion'; 'applicationgateways' = 'Application Gateway'
+# Type name of a network node as shown in the table: from the language pack (nodetype.<type>), else the type as it is.
+function Get-NodeTypeName([string]$Type) {
+    $key = 'nodetype.' + $Type.ToLower()
+    if ($script:Lang -and $script:Lang.ContainsKey($key)) { T $key } else { $Type }
 }
 
 function Get-StructurePageHtml($d) {
-    if (-not $d.StructurePresent) { return (New-NoDataHtml 'Ingen strukturdata hittades.' 'Strukturen hämtas i steg 9 (och ur Governance Visualizer). Se körningsstatus på sidan Om körningen. Vanlig orsak: Reader saknas på Tenant Root Group.') }
+    if (-not $d.StructurePresent) { return (New-NoDataHtml (T 'str.none.what') (T 'str.none.why')) }
     $sb = [System.Text.StringBuilder]::new()
+    $yes = T 'fmt.yes'; $no = T 'fmt.no'
 
     $mgRows = $d.MgRows
     $fromGv = $false
@@ -244,91 +250,90 @@ function Get-StructurePageHtml($d) {
     $model = $null
     if ($d.Vnets) { $model = Get-NetworkModel $d }
 
-    # Nyckeltal
+    # Key figures
     [void]$sb.Append('<div class="tiles">')
     if ($mgRows) {
-        [void]$sb.Append((Tile 'Managementgrupper' @($mgRows | Where-Object Typ -eq 'Managementgrupp').Count))
-        [void]$sb.Append((Tile 'Prenumerationer' @($mgRows | Where-Object Typ -eq 'Prenumeration').Count))
+        [void]$sb.Append((Tile (T 'tile.mgs') @($mgRows | Where-Object Typ -eq 'Managementgrupp').Count))
+        [void]$sb.Append((Tile (T 'tile.subscriptions') @($mgRows | Where-Object Typ -eq 'Prenumeration').Count))
     }
     if ($model) {
-        [void]$sb.Append((Tile 'Virtuella nät' @($model.Vnets).Count))
-        [void]$sb.Append((Tile 'Peerings' @($d.Peerings | Where-Object { $_ }).Count))
-        $iso = @($model.Vnets | Where-Object { $model.Role[([string]$_.Id).ToLower()] -eq 'Isolerat' }).Count
-        if ($iso) { [void]$sb.Append((Tile 'Isolerade nät' $iso 'medium')) }
+        [void]$sb.Append((Tile (T 'tile.vnets') @($model.Vnets).Count))
+        [void]$sb.Append((Tile (T 'tile.peerings') @($d.Peerings | Where-Object { $_ }).Count))
+        $iso = @($model.Vnets | Where-Object { $model.Role[([string]$_.Id).ToLower()] -eq 'Isolated' }).Count
+        if ($iso) { [void]$sb.Append((Tile (T 'tile.isolated') $iso 'medium')) }
     }
     [void]$sb.Append('</div>')
 
-    # Managementgruppsträdet
-    [void]$sb.Append('<h2>Managementgrupper och prenumerationer</h2>')
+    # Management group tree
+    [void]$sb.Append('<h2>' + (Esc (T 'str.mgHeading')) + '</h2>')
     if ($mgRows) {
-        $src = if ($fromGv) { 'Ur Governance Visualizer: grupper utan rolltilldelningar eller policys kan saknas.' } else { 'Hämtat direkt från Azure.' }
-        [void]$sb.Append('<p class="muted">Så här är tenanten uppdelad. ' + (Esc $src) + '</p>' + (Get-MgTreeHtml $mgRows $subRes))
+        $src = if ($fromGv) { T 'str.srcGovViz' } else { T 'str.srcAzure' }
+        [void]$sb.Append('<p class="muted">' + (Esc ((T 'str.treeIntro') + ' ' + $src)) + '</p>' + (Get-MgTreeHtml $mgRows $subRes))
     }
-    else { [void]$sb.Append((New-NoDataHtml 'Ingen information om managementgrupper.' 'Hämtningen misslyckades eller saknar underlag. Se Om körningen.')) }
+    else { [void]$sb.Append((New-NoDataHtml (T 'str.noMg.what') (T 'str.noMg.why'))) }
 
-    # Nätverk
-    [void]$sb.Append('<h2>Virtuella nät och peerings</h2>')
+    # Network
+    [void]$sb.Append('<h2>' + (Esc (T 'str.netHeading')) + '</h2>')
     if (-not $model) {
-        [void]$sb.Append((New-Callout 'Inga virtuella nät hittades, eller så gick inte nätverksdatan att hämta (se varningar under Om körningen). Det är normalt i en tenant som inte använder VNet.'))
+        [void]$sb.Append((New-Callout (Esc (T 'str.noVnets'))))
     }
     else {
-        # Iakttagelser
+        # Observations
         $findings = [System.Collections.Generic.List[string]]::new()
-        $isoNames = @($model.Vnets | Where-Object { $model.Role[([string]$_.Id).ToLower()] -eq 'Isolerat' } | ForEach-Object { $_.Namn })
-        if ($isoNames.Count) { $findings.Add(('<b>Isolerade virtuella nät utan peering ({0}):</b> {1}. Kontrollera att det är avsett.' -f $isoNames.Count, (Esc (($isoNames | Select-Object -First 8) -join ', ')))) }
+        $isoNames = @($model.Vnets | Where-Object { $model.Role[([string]$_.Id).ToLower()] -eq 'Isolated' } | ForEach-Object { $_.Namn })
+        if ($isoNames.Count) { $findings.Add((T 'find.isolated.html' $isoNames.Count (Esc (($isoNames | Select-Object -First 8) -join ', ')))) }
         $bad = @($model.Edges | Where-Object State -eq 'bad')
-        if ($bad.Count) { $findings.Add(('<b>Peerings som inte är i läget Connected ({0}):</b> till exempel Disconnected eller Initiated (bara ena sidan klar). Åtgärda eller ta bort dem.' -f $bad.Count)) }
+        if ($bad.Count) { $findings.Add((T 'find.notConnected.html' $bad.Count)) }
         $one = @($model.Edges | Where-Object State -eq 'oneway')
         if ($one.Count) {
-            $names = @($one | ForEach-Object { '{0} och {1}' -f $(if ($model.ById.ContainsKey($_.A)) { $model.ById[$_.A].Namn } else { Get-IdLeaf $_.A }), $(if ($model.ById.ContainsKey($_.B)) { $model.ById[$_.B].Namn } else { Get-IdLeaf $_.B }) })
-            $findings.Add(('<b>Ensidiga peerings ({0}):</b> bara det ena nätet har en peering mot det andra ({1}). Trafik flödar inte förrän båda sidor finns.' -f $one.Count, (Esc (($names | Select-Object -First 5) -join '; '))))
+            $names = @($one | ForEach-Object { T 'find.pairNames' $(if ($model.ById.ContainsKey($_.A)) { $model.ById[$_.A].Namn } else { Get-IdLeaf $_.A }) $(if ($model.ById.ContainsKey($_.B)) { $model.ById[$_.B].Namn } else { Get-IdLeaf $_.B }) })
+            $findings.Add((T 'find.oneWay.html' $one.Count (Esc (($names | Select-Object -First 5) -join '; '))))
         }
         if ($model.Overlaps.Count) {
-            $ov = @($model.Overlaps | Select-Object -First 6 | ForEach-Object { '{0} ({1}) och {2} ({3})' -f $_.A.Namn, $_.ACidr, $_.B.Namn, $_.BCidr })
-            $findings.Add(('<b>Överlappande adressrymder mellan olika nät ({0}):</b> {1}. Nät med överlappande adresser går inte att peera och försvårar senare koppling.' -f $model.Overlaps.Count, (Esc ($ov -join '; '))))
+            $ov = @($model.Overlaps | Select-Object -First 6 | ForEach-Object { T 'find.overlapPair' $_.A.Namn $_.ACidr $_.B.Namn $_.BCidr })
+            $findings.Add((T 'find.overlap.html' $model.Overlaps.Count (Esc ($ov -join '; '))))
         }
-        if ($model.OverlapSkipped) { $findings.Add('Kontrollen av överlappande adressrymder hoppades över (fler än 400 nät).') }
+        if ($model.OverlapSkipped) { $findings.Add((Esc (T 'find.overlapSkipped'))) }
         $hubs = @($model.Vnets | Where-Object { $model.Role[([string]$_.Id).ToLower()] -eq 'Hub' })
-        if ($hubs.Count) { $findings.Add(('<b>Hub-and-spoke:</b> hub-nät ({0}): {1}.' -f $hubs.Count, (Esc (($hubs | ForEach-Object { '{0} ({1} peerings)' -f $_.Namn, $model.Degree[([string]$_.Id).ToLower()] } | Select-Object -First 5) -join ', ')))) }
-        elseif (@($model.Edges).Count -eq 0) { $findings.Add('Inga peerings: nätverken är inte kopplade till varandra.') }
-        if ($findings.Count) { [void]$sb.Append('<h3>Det som syns</h3><ul>' + (($findings | ForEach-Object { "<li>$_</li>" }) -join '') + '</ul>') }
+        if ($hubs.Count) { $findings.Add((T 'find.hubSpoke.html' $hubs.Count (Esc (($hubs | ForEach-Object { T 'find.hubItem' $_.Namn $model.Degree[([string]$_.Id).ToLower()] } | Select-Object -First 5) -join ', ')))) }
+        elseif (@($model.Edges).Count -eq 0) { $findings.Add((Esc (T 'find.noPeerings'))) }
+        if ($findings.Count) { [void]$sb.Append('<h3>' + (Esc (T 'str.findings')) + '</h3><ul>' + (($findings | ForEach-Object { "<li>$_</li>" }) -join '') + '</ul>') }
 
-        # Bilder
+        # Diagrams
         $diagrams = 0
         foreach ($c in $model.Components) {
             if ($diagrams -ge 4) { break }
-            if (@($c).Count -gt 13) { [void]$sb.Append((New-Callout ('En grupp med {0} sammankopplade nät är för stor för en bild. Se tabellerna nedan.' -f @($c).Count))); continue }
+            if (@($c).Count -gt 13) { [void]$sb.Append((New-Callout (Esc (T 'str.tooBig' @($c).Count)))); continue }
             [void]$sb.Append('<div class="card net-card">' + (Get-PeeringSvg $c $model) + '</div>')
             $diagrams++
         }
-        if ($diagrams) { [void]$sb.Append('<p class="muted">Rutor är virtuella nät (kantad ruta = hub, streckad = ligger utanför det som kunde läsas). Heldragen linje är en fungerande peering, <span class="net-key warn">streckad gul</span> är ensidig och <span class="net-key bad">streckad röd</span> är bruten.</p>') }
+        if ($diagrams) { [void]$sb.Append('<p class="muted">' + (T 'str.legend.html') + '</p>') }
 
-        # Tabeller
+        # Tables
         $rows = foreach ($v in $model.Vnets) {
             $id = ([string]$v.Id).ToLower()
             $sn = if ($model.SubName.ContainsKey(([string]$v.Prenumeration).ToLower())) { $model.SubName[([string]$v.Prenumeration).ToLower()] } else { $v.Prenumeration }
             $deg = 0; if ($model.Degree.ContainsKey($id)) { $deg = $model.Degree[$id] }
-            [pscustomobject]@{ Namn = $v.Namn; Prenumeration = $sn; Plats = $v.Plats; Adressrymd = $v.Adressrymd; Subnat = $v.Subnat; Peerings = $deg; Roll = $model.Role[$id] }
+            [pscustomobject]@{ Namn = $v.Namn; Prenumeration = $sn; Plats = $v.Plats; Adressrymd = $v.Adressrymd; Subnat = $v.Subnat; Peerings = $deg; Roll = (T "role.$($model.Role[$id])"); RollSort = $model.Role[$id] }
         }
-        $rows = @($rows | Sort-Object @{ Expression = { switch ($_.Roll) { 'Hub' { 0 } 'Spoke' { 1 } default { 2 } } } }, Namn)
-        [void]$sb.Append('<h3>Virtuella nät</h3>' + (ConvertTo-HtmlTable $rows @(@{Name='Namn';Label='Nät'}, @{Name='Roll';Label='Roll'}, @{Name='Prenumeration';Label='Prenumeration'}, @{Name='Plats';Label='Plats'}, @{Name='Adressrymd';Label='Adressrymd'}, @{Name='Subnat';Label='Subnät';Num=$true}, @{Name='Peerings';Label='Peerings';Num=$true}) 40))
+        $rows = @($rows | Sort-Object @{ Expression = { switch ($_.RollSort) { 'Hub' { 0 } 'Spoke' { 1 } default { 2 } } } }, Namn)
+        [void]$sb.Append('<h3>' + (Esc (T 'str.vnets')) + '</h3>' + (ConvertTo-HtmlTable $rows @(@{Name='Namn';Label=(T 'col.network')}, @{Name='Roll';Label=(T 'col.role')}, @{Name='Prenumeration';Label=(T 'col.subscription')}, @{Name='Plats';Label=(T 'col.location')}, @{Name='Adressrymd';Label=(T 'col.addressSpace')}, @{Name='Subnat';Label=(T 'col.subnets');Num=$true}, @{Name='Peerings';Label=(T 'col.peerings');Num=$true}) 40))
 
         if ($d.Peerings) {
             $pr = foreach ($p in @($d.Peerings | Where-Object { $_ })) {
-                [pscustomobject]@{ Fran = $p.Fran; Till = $p.Till; Status = $p.Status; Transit = $(if ($p.GatewayTransit -eq 'True') { 'Ja' } else { 'Nej' }); Remote = $(if ($p.AnvandRemoteGateways -eq 'True') { 'Ja' } else { 'Nej' }); Fwd = $(if ($p.ForwardedTraffic -eq 'True') { 'Ja' } else { 'Nej' }) }
+                [pscustomobject]@{ Fran = $p.Fran; Till = $p.Till; Status = $p.Status; Transit = $(if ($p.GatewayTransit -eq 'True') { $yes } else { $no }); Remote = $(if ($p.AnvandRemoteGateways -eq 'True') { $yes } else { $no }); Fwd = $(if ($p.ForwardedTraffic -eq 'True') { $yes } else { $no }) }
             }
-            [void]$sb.Append('<h3>Peerings</h3>' + (ConvertTo-HtmlTable @($pr) @(@{Name='Fran';Label='Från'}, @{Name='Till';Label='Till'}, @{Name='Status';Label='Status'}, @{Name='Transit';Label='Gateway-transit'}, @{Name='Remote';Label='Använder remote gateway'}, @{Name='Fwd';Label='Vidarebefordrad trafik'}) 40))
+            [void]$sb.Append('<h3>' + (Esc (T 'str.peerings')) + '</h3>' + (ConvertTo-HtmlTable @($pr) @(@{Name='Fran';Label=(T 'col.from')}, @{Name='Till';Label=(T 'col.to')}, @{Name='Status';Label=(T 'col.status')}, @{Name='Transit';Label=(T 'col.gatewayTransit')}, @{Name='Remote';Label=(T 'col.remoteGateway')}, @{Name='Fwd';Label=(T 'col.forwarded')}) 40))
         }
         if ($d.NetNodes) {
             $nr = foreach ($n in @($d.NetNodes | Where-Object { $_ })) {
-                $t = $n.Typ.ToLower(); $tn = if ($script:NodeTypeNames.ContainsKey($t)) { $script:NodeTypeNames[$t] } else { $n.Typ }
                 $vname = ''
                 if ($n.VnetId -and $model.ById.ContainsKey(([string]$n.VnetId).ToLower())) { $vname = $model.ById[([string]$n.VnetId).ToLower()].Namn }
-                [pscustomobject]@{ Typ = $tn; Namn = $n.Namn; Plats = $n.Plats; Extra = $n.Extra; Vnet = $vname }
+                [pscustomobject]@{ Typ = (Get-NodeTypeName $n.Typ); Namn = $n.Namn; Plats = $n.Plats; Extra = $n.Extra; Vnet = $vname }
             }
-            [void]$sb.Append('<h3>Nätverksnoder</h3><p class="muted">Brandväggar, gateways, ExpressRoute, Virtual WAN, Bastion och Application Gateway.</p>' + (ConvertTo-HtmlTable @($nr) @(@{Name='Typ';Label='Typ'}, @{Name='Namn';Label='Namn'}, @{Name='Vnet';Label='Ligger i nät'}, @{Name='Plats';Label='Plats'}, @{Name='Extra';Label='SKU/typ'}) 40))
+            [void]$sb.Append('<h3>' + (Esc (T 'str.nodes')) + '</h3><p class="muted">' + (Esc (T 'str.nodesText')) + '</p>' + (ConvertTo-HtmlTable @($nr) @(@{Name='Typ';Label=(T 'col.type')}, @{Name='Namn';Label=(T 'col.name')}, @{Name='Vnet';Label=(T 'col.inNetwork')}, @{Name='Plats';Label=(T 'col.location')}, @{Name='Extra';Label=(T 'col.skuType')}) 40))
         }
     }
-    [void]$sb.Append('<p class="muted">Underlag: Azure Resource Graph och Azure Resource Manager (read-only). Nät i prenumerationer som kontot inte kan läsa syns inte, och en peering mot ett sådant nät visas bara med namnet från peeringen.</p>')
+    [void]$sb.Append('<p class="muted">' + (Esc (T 'str.footer')) + '</p>')
     $sb.ToString()
 }

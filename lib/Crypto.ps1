@@ -1,33 +1,33 @@
 ﻿<#
-  Lösenordskryptering av resultatpaketet (zip) för överlämning.
+  Password encryption of the result package (zip) for handover.
 
-  Zip-formatet i Windows PowerShell kan inte kryptera, och 7-Zip finns inte på kundens dator. Därför används ett eget,
-  enkelt format som bygger på standardfunktioner i .NET (fungerar i både Windows PowerShell 5.1 och PowerShell 7):
+  The zip format in Windows PowerShell cannot encrypt, and 7-Zip is not on the customer's computer. Therefore a simple
+  format of our own is used, built on standard .NET functions (works in both Windows PowerShell 5.1 and PowerShell 7):
 
-    Rubrik:  "RKENC001" (8 byte) + salt (16) + antal PBKDF2-varv (4, little endian) + IV (16)
-    Innehåll: AES-256-CBC av zip-filen
-    Slut:    HMAC-SHA256 (32) över rubrik + innehåll (encrypt-then-MAC)
+    Header:  "RKENC001" (8 bytes) + salt (16) + number of PBKDF2 iterations (4, little endian) + IV (16)
+    Content: AES-256-CBC of the zip file
+    End:     HMAC-SHA256 (32) over header + content (encrypt-then-MAC)
 
-  Nycklarna (32 byte för kryptering, 32 för HMAC) härleds ur lösenordet med PBKDF2-HMAC-SHA256. HMAC:en kontrolleras
-  innan något dekrypteras, så fel lösenord eller en ändrad fil ger ett tydligt fel i stället för skräp.
-  Filerna packas upp med Unprotect-Rapportkit.ps1.
+  The keys (32 bytes for encryption, 32 for HMAC) are derived from the password with PBKDF2-HMAC-SHA256. The HMAC is
+  checked before anything is decrypted, so a wrong password or a modified file gives a clear error instead of garbage.
+  The files are unpacked with Unprotect-Rapportkit.ps1.
 
-  Obs: formatet är eget och inte granskat av tredje part. Det använder bara standardprimitiver, men välj ett långt
-  lösenord (minst 12 tecken) och skicka det via en annan kanal än filen.
+  Note: the format is our own and has not been reviewed by a third party. It only uses standard primitives, but choose a long
+  password (at least 12 characters) and send it through another channel than the file.
 #>
 
 $script:RkMagic = [System.Text.Encoding]::ASCII.GetBytes('RKENC001')
 $script:RkIterations = 600000
 $script:RkMinPasswordLength = 12
 
-# Gör om en SecureString till vanlig text. Används bara precis när nyckeln ska härledas.
+# Turns a SecureString into plain text. Used only right when the key is to be derived.
 function ConvertFrom-RkSecureString([System.Security.SecureString]$Secure) {
     $bstr = [System.Runtime.InteropServices.Marshal]::SecureStringToBSTR($Secure)
     try { [System.Runtime.InteropServices.Marshal]::PtrToStringBSTR($bstr) }
     finally { [System.Runtime.InteropServices.Marshal]::ZeroFreeBSTR($bstr) }
 }
 
-# Härleder krypteringsnyckel och HMAC-nyckel ur lösenord, salt och antal varv.
+# Derives the encryption key and HMAC key from the password, salt and number of iterations.
 function Get-RkKeys([string]$Password, [byte[]]$Salt, [int]$Iterations) {
     $kdf = New-Object System.Security.Cryptography.Rfc2898DeriveBytes($Password, $Salt, $Iterations, [System.Security.Cryptography.HashAlgorithmName]::SHA256)
     try {
@@ -37,7 +37,7 @@ function Get-RkKeys([string]$Password, [byte[]]$Salt, [int]$Iterations) {
     finally { $kdf.Dispose() }
 }
 
-# Jämför två byte-arrayer utan att avbryta vid första skillnaden.
+# Compares two byte arrays without stopping at the first difference.
 function Test-RkEqual([byte[]]$A, [byte[]]$B) {
     if ($A.Length -ne $B.Length) { return $false }
     $diff = 0
@@ -45,10 +45,10 @@ function Test-RkEqual([byte[]]$A, [byte[]]$B) {
     $diff -eq 0
 }
 
-# Krypterar $Path till $Destination med lösenordet.
+# Encrypts $Path to $Destination with the password.
 function Protect-RapportkitFile([string]$Path, [string]$Destination, [System.Security.SecureString]$Password) {
     $plain = ConvertFrom-RkSecureString $Password
-    if ($plain.Length -lt $script:RkMinPasswordLength) { throw "Lösenordet är för kort (minst $($script:RkMinPasswordLength) tecken)." }
+    if ($plain.Length -lt $script:RkMinPasswordLength) { throw "The password is too short (at least $($script:RkMinPasswordLength) characters)." }
     $data = [System.IO.File]::ReadAllBytes($Path)
     $salt = New-Object byte[] 16
     $rng = [System.Security.Cryptography.RandomNumberGenerator]::Create()
@@ -78,16 +78,16 @@ function Protect-RapportkitFile([string]$Path, [string]$Destination, [System.Sec
     finally { $aes.Dispose() }
 }
 
-# Dekrypterar $Path till $Destination. Ger ett begripligt fel vid fel lösenord eller ändrad fil.
+# Decrypts $Path to $Destination. Gives an understandable error for a wrong password or a modified file.
 function Unprotect-RapportkitFile([string]$Path, [string]$Destination, [System.Security.SecureString]$Password) {
     $all = [System.IO.File]::ReadAllBytes($Path)
     $headerLen = 8 + 16 + 4 + 16
-    if ($all.Length -lt ($headerLen + 16 + 32)) { throw 'Filen är för liten för att vara ett krypterat rapportpaket.' }
+    if ($all.Length -lt ($headerLen + 16 + 32)) { throw 'The file is too small to be an encrypted report package.' }
     $magic = $all[0..7]
-    if (-not (Test-RkEqual ([byte[]]$magic) $script:RkMagic)) { throw 'Filen är inte ett krypterat rapportpaket från Azure Rapportkit (fel filformat).' }
+    if (-not (Test-RkEqual ([byte[]]$magic) $script:RkMagic)) { throw 'The file is not an encrypted report package from Azure Rapportkit (wrong file format).' }
     $salt = [byte[]]$all[8..23]
     $iterations = [BitConverter]::ToInt32($all, 24)
-    if ($iterations -lt 100000 -or $iterations -gt 5000000) { throw 'Filens rubrik ser ogiltig ut.' }
+    if ($iterations -lt 100000 -or $iterations -gt 5000000) { throw 'The header of the file looks invalid.' }
     $iv = [byte[]]$all[28..43]
     $tag = [byte[]]$all[($all.Length - 32)..($all.Length - 1)]
     $signed = New-Object byte[] ($all.Length - 32)
@@ -95,7 +95,7 @@ function Unprotect-RapportkitFile([string]$Path, [string]$Destination, [System.S
     $keys = Get-RkKeys (ConvertFrom-RkSecureString $Password) $salt $iterations
     $hmac = New-Object System.Security.Cryptography.HMACSHA256(, [byte[]]$keys.Mac)
     try { $calc = $hmac.ComputeHash($signed) } finally { $hmac.Dispose() }
-    if (-not (Test-RkEqual $calc $tag)) { throw 'Fel lösenord, eller så har filen ändrats eller skadats.' }
+    if (-not (Test-RkEqual $calc $tag)) { throw 'Wrong password, or the file has been modified or damaged.' }
     $cipher = New-Object byte[] ($signed.Length - $headerLen)
     [Array]::Copy($signed, $headerLen, $cipher, 0, $cipher.Length)
     $aes = [System.Security.Cryptography.Aes]::Create()

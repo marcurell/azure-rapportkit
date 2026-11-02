@@ -4,7 +4,7 @@ Ett PowerShell-script som tar fram underlag inför en genomgång av er Azure-mil
 
 - Scriptet **skriver inget i era Azure-resurser** eller i Entra ID. Det använder bara läsande anrop.
 - Resultatet sparas **lokalt** i en mapp ni väljer. Ingenting skickas någonstans av scriptet.
-- Vad som sker, vilken data som hamnar i resultatet och vad som ändras på datorn står i [docs/KUNDINFO.md](docs/KUNDINFO.md). En kortfattad steg-för-steg-guide finns i `docs\Kundguide-Azure-Rapportkit.docx`.
+- Vad som sker, vilken data som hamnar i resultatet och vad som ändras på datorn står i [docs/KUNDINFO.md](docs/KUNDINFO.md). En kortfattad steg-för-steg-guide finns i `docs\Azure-Rapportkit-Kundguide.docx`.
 
 ## Innan ni börjar
 
@@ -33,11 +33,11 @@ Windows PowerShell 5.1 räcker: scriptet installerar PowerShell 7 om det behövs
 
 ## Under körningen
 
-Scriptet visar en ruta per steg (`STEG 3 AV 10`) och beskriver vad som händer. Det frågar efter:
+Scriptet visar en ruta per steg (`STEP 3 OF 10`) och beskriver vad som händer. Meddelandena i fönstret är på engelska; rapporten får ni på svenska. Frågorna besvaras med **y** (ja) eller **n** (nej); **j** och **ja** fungerar också. Det frågar efter:
 
 - **Tenant-ID** (ett förslag visas om ni redan är inloggade).
 - **Var resultatet ska sparas.** Undvik OneDrive-mappar och mappar som synkas till molnet: resultatet är konfidentiellt.
-- **Om resultatet ska krypteras med ett lösenord.** Svara **ja** om filen ska skickas vidare. Ni väljer ett lösenord på minst 12 tecken (skrivs två gånger). Skriv ner det: det kan inte återskapas.
+- **Om resultatet ska krypteras med ett lösenord.** Svara **y** (ja) om filen ska skickas vidare. Ni väljer ett lösenord på minst 12 tecken (skrivs två gånger). Skriv ner det: det kan inte återskapas.
 - **Om en anonymiserad version av rapporten ska skapas** (för demo eller delning). Normalt: nej.
 - **Inloggning** i webbläsaren (Azure CLI, Azure PowerShell och, om Maester körs, Microsoft Graph).
 
@@ -45,7 +45,7 @@ Saknas en roll eller något annat viktigt får ni veta det direkt och väljer om
 
 ## När det är klart
 
-Resultatet ligger i `<resultatmapp>\<år-månad>\`. Öppna `rapport.html` för att titta på det. Rapporten har sju sidor: Översikt, Struktur, Styrning, Resurser, Entra ID, Defender & kostnad och Om körningen. Knappen **Spara hela rapporten som PDF** samlar alla sidor.
+Resultatet ligger i `<resultatmapp>\<år-månad>\`. Öppna `rapport.html` för att titta på det. Rapporten har sju sidor: Översikt, Struktur, Styrning, Resurser, Entra ID, Defender & kostnad och Om körningen. Knappen **Spara hela rapporten som PDF** samlar alla sidor. Rapportens språk är det kitet är förberett för (`-ReportLanguage`, till exempel `-ReportLanguage en` för engelska).
 
 **Skicka resultatet till oss:**
 
@@ -79,6 +79,7 @@ Scriptet loggar ut de inloggningar det själv skapade när det är klart.
 | `-DeviceLogin` | Inloggning med kod i stället för webbläsarfönster |
 | `-HidePersonalData` | Dölj namn och e-post i Governance Visualizers rapport |
 | `-Anonymize` | Skapa även en anonymiserad rapport i mappen `anonym` |
+| `-ReportLanguage <kod>` | Språk för rapportens text (`sv` eller `en`) |
 | `-NoEncrypt` | Kryptera inte resultatpaketet (bara om det inte lämnar datorn) |
 | `-KeepLogin` | Logga inte ut efter körningen |
 

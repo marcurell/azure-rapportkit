@@ -65,12 +65,12 @@ Rapportsidorna som scriptet skapar (`rapport*.html`) är fristående: stil, logg
 
 Undantaget är **Azure Governance Visualizers egen rapport** (filen `AzGovViz_*.html` i mappen `azgovviz\`, som rapporten länkar till som fördjupning). Den är inte fristående: när den öppnas hämtar webbläsaren dess formatmall, skript och ikoner från internet, bland annat `www.azadvertizer.net`, `cdnjs.cloudflare.com` och `code.jquery.com`. Det innebär att den inte visas rätt utan internetåtkomst, och att dessa adresser får se webbläsarens anrop. Vill ni undvika det: öppna inte den filen, utan använd sammanställningen på rapportsidan Styrning (som bygger på samma data) eller ta bort filen innan resultatet delas.
 
-Rapportens utseende (färger, logga, sidfot) styrs av filerna i mappen `branding\`, se `branding\README.md`.
+Rapportens utseende (färger, logga, sidfot) styrs av filerna i mappen `branding\`, se `branding\README.md`. Rapportens språk styrs av `-ReportLanguage` (eller `language` i `branding\theme.json`); meddelandena som scriptet skriver i fönstret är på engelska.
 
 ## Hur resultatet lämnas över
 
 - Scriptet skapar en zip-fil med en tillhörande kontrollsumma (`.sha256`) så att mottagaren kan kontrollera att filen inte ändrats.
-- Scriptet frågar i början om zip-filen ska krypteras. Svarar ni ja anger ni ett **lösenord** (minst 12 tecken) och filen krypteras med det (AES-256); svarar ni nej blir det en vanlig zip. Filen heter `rapportkit_<tenant>_<period>.zip.rkenc`. Skicka filen och lösenordet **på olika vägar** (till exempel filen via e-post och lösenordet via SMS eller telefon). Lösenordet sparas inte någonstans av scriptet.
+- Scriptet frågar i början om zip-filen ska krypteras (svara y för ja). Svarar ni ja anger ni ett **lösenord** (minst 12 tecken) och filen krypteras med det (AES-256); svarar ni nej blir det en vanlig zip. Filen heter `rapportkit_<tenant>_<period>.zip.rkenc`. Skicka filen och lösenordet **på olika vägar** (till exempel filen via e-post och lösenordet via SMS eller telefon). Lösenordet sparas inte någonstans av scriptet.
 - Mappen med de okrypterade resultaten ligger kvar på datorn som körde scriptet. Ta bort den när uppdraget är klart.
 - Scriptet skickar inget resultat någonstans själv.
 

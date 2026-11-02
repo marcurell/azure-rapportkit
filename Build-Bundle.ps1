@@ -1,30 +1,34 @@
 ﻿<#
 .SYNOPSIS
-  Laddar ner alla verktyg till tools\ och packar scriptet + verktygen i en zip som kan skickas till kunden.
-  Kunden kör sedan: .\Run-Rapportkit.ps1 -Offline
+  Downloads all the tools to tools\ and packs the script + the tools in a zip that can be sent to the customer.
+  The customer then runs: .\Run-Rapportkit.ps1 -Offline
 
 .DESCRIPTION
-  Versioner och kontrollsummor läses ur Run-Rapportkit.ps1 ($Pins), så att bundlen alltid innehåller exakt de
-  testade versionerna. Nedladdade zip-filer kontrolleras mot kontrollsumman innan paketet byggs.
+  Versions and checksums are read from Run-Rapportkit.ps1 ($Pins), so that the bundle always contains exactly the
+  tested versions. Downloaded zip files are checked against the checksum before the package is built.
 
 .PARAMETER Out
-  Sökväg till zipfilen som skapas.
+  Path of the zip file that is created.
+.PARAMETER Language
+  Language of the report text and of the customer documents in the bundle (en, sv). Default: the language in branding\theme.json, else English.
 .PARAMETER SkipInstallers
-  Hoppa över de stora installationsfilerna (PowerShell 7, Azure CLI, Git) om kunden redan har dem.
+  Skip the large installer files (PowerShell 7, Azure CLI, Git) if the customer already has them.
 #>
 [CmdletBinding()]
 param(
     [string]$Out = (Join-Path $PSScriptRoot 'rapportkit-bundle.zip'),
+    [ValidatePattern('^[a-z]{2,3}(-[A-Za-z]{2,4})?$')]
+    [string]$Language,
     [switch]$SkipInstallers
 )
 $ErrorActionPreference = 'Stop'
 $ProgressPreference = 'SilentlyContinue'
 
-# --- Läs pinnade versioner och kontrollsummor ur huvudscriptet (en enda källa)
+# --- Read pinned versions and checksums from the main script (a single source)
 $src = Get-Content (Join-Path $PSScriptRoot 'Run-Rapportkit.ps1') -Raw
 function Get-Pin([string]$Pattern) {
     $m = [regex]::Match($src, $Pattern)
-    if (-not $m.Success) { throw "Hittade inte '$Pattern' i Run-Rapportkit.ps1" }
+    if (-not $m.Success) { throw "Did not find '$Pattern' in Run-Rapportkit.ps1" }
     $m.Groups[1].Value
 }
 $GvVersion = Get-Pin "\`$GvVersion\s*=\s*'([0-9.]+)'"
@@ -45,24 +49,24 @@ $h = @{ 'User-Agent' = 'azure-rapportkit' }
 function Get-GhAsset($repo, $pattern) {
     $rel = Invoke-RestMethod "https://api.github.com/repos/$repo/releases/latest" -Headers $h
     $a = $rel.assets | Where-Object name -like $pattern | Select-Object -First 1
-    if (-not $a) { throw "Hittade ingen fil som matchar '$pattern' i senaste releasen av $repo." }
+    if (-not $a) { throw "Found no file that matches '$pattern' in the latest release of $repo." }
     $a
 }
 
-# Laddar ner med 3 försök och kontrollerar att filen inte är för liten.
+# Downloads with 3 attempts and checks that the file is not too small.
 function Get-File($url, $dest, [long]$minBytes = 1024) {
     for ($i = 1; $i -le 3; $i++) {
         try {
-            Write-Host "  $url (försök $i/3)"
+            Write-Host "  $url (attempt $i/3)"
             Invoke-WebRequest $url -OutFile $dest -Headers $h -UseBasicParsing
-            if ((Get-Item $dest).Length -lt $minBytes) { throw 'filen är för liten' }
+            if ((Get-Item $dest).Length -lt $minBytes) { throw 'the file is too small' }
             return
         }
-        catch { Remove-Item $dest -Force -ErrorAction SilentlyContinue; if ($i -eq 3) { throw "Nedladdning misslyckades: $url ($($_.Exception.Message))" }; Start-Sleep (2 * $i) }
+        catch { Remove-Item $dest -Force -ErrorAction SilentlyContinue; if ($i -eq 3) { throw "Download failed: $url ($($_.Exception.Message))" }; Start-Sleep (2 * $i) }
     }
 }
 
-# Kontrollerar att en zip är hel och innehåller en förväntad post.
+# Checks that a zip is intact and contains an expected entry.
 function Assert-Zip($path, $mustContain) {
     Add-Type -AssemblyName System.IO.Compression.FileSystem
     $z = [System.IO.Compression.ZipFile]::OpenRead($path)
@@ -70,11 +74,11 @@ function Assert-Zip($path, $mustContain) {
     finally { $z.Dispose() }
 }
 
-# Kontrollerar SHA256 mot den testade kontrollsumman.
+# Checks SHA256 against the tested checksum.
 function Assert-Sha($path, $expected, $what) {
     $actual = (Get-FileHash $path -Algorithm SHA256).Hash
-    if ($actual -ne $expected) { throw "${what}: kontrollsumman stämmer inte (väntade $expected, fick $actual). Uppströmsfilen kan ha ändrats: kontrollera och uppdatera `$Pins i Run-Rapportkit.ps1." }
-    Write-Host "  ${what}: SHA256 stämmer"
+    if ($actual -ne $expected) { throw "${what}: the checksum does not match (expected $expected, got $actual). The upstream file may have changed: check and update `$Pins in Run-Rapportkit.ps1." }
+    Write-Host "  ${what}: SHA256 matches"
 }
 
 Write-Host "azqr $AzqrVersion" -ForegroundColor Cyan
@@ -98,9 +102,9 @@ foreach ($m in $modules) {
     else {
         Save-Module -Name $m.N -RequiredVersion $m.V -Path "$tools\modules" -Force
     }
-    if (-not (Test-Path $dest)) { throw "Modulen $($m.N) hämtades inte till $dest" }
+    if (-not (Test-Path $dest)) { throw "The module $($m.N) was not fetched to $dest" }
 }
-# Beroenden till modulerna hamnar som egna mappar i tools\modules och följer med i zippen.
+# Dependencies of the modules end up as folders of their own in tools\modules and are included in the zip.
 
 if (-not $SkipInstallers) {
     Write-Host 'Installers' -ForegroundColor Cyan
@@ -111,23 +115,22 @@ if (-not $SkipInstallers) {
     Get-File 'https://aka.ms/installazurecliwindowsx64' "$tools\installers\azure-cli-latest.msi" 10MB
 }
 
-Write-Host 'Packar zip' -ForegroundColor Cyan
+Write-Host 'Packing the zip' -ForegroundColor Cyan
 if (Test-Path $Out) { Remove-Item $Out -Force }
 $stage = Join-Path $env:TEMP 'rapportkit-stage'
 if (Test-Path $stage) { Remove-Item $stage -Recurse -Force }
 New-Item -ItemType Directory $stage | Out-Null
 foreach ($file in 'Run-Rapportkit.ps1', 'LICENSE', 'THIRD-PARTY-NOTICES.md') { Copy-Item (Join-Path $PSScriptRoot $file) $stage }
-# Kundversion: kundens README och guide (inget som pekar på repot).
-Copy-Item (Join-Path $PSScriptRoot 'docs\kund\README.md') "$stage\README.md"
-New-Item -ItemType Directory "$stage\docs" | Out-Null
-Copy-Item (Join-Path $PSScriptRoot 'docs\KUNDINFO.md') "$stage\docs"
-Get-ChildItem (Join-Path $PSScriptRoot 'docs\kund') -Filter '*.docx' | Copy-Item -Destination "$stage\docs"
-foreach ($dir in 'lib', 'branding', 'branding-exempel') { Copy-Item (Join-Path $PSScriptRoot $dir) "$stage\$dir" -Recurse }
+foreach ($dir in 'lib', 'lang', 'branding', 'branding-exempel') { Copy-Item (Join-Path $PSScriptRoot $dir) "$stage\$dir" -Recurse }
+# Customer version: the customer's README and guide in the chosen language (nothing that points to the repo).
+. (Join-Path $PSScriptRoot 'lib\Packaging.ps1')
+if ($Language) { Set-ThemeLanguage "$stage\branding\theme.json" $Language }
+[void](Copy-CustomerDocs $PSScriptRoot $stage $Language)
 Copy-Item $tools "$stage\tools" -Recurse
 Compress-Archive "$stage\*" $Out
 Remove-Item $stage -Recurse -Force
 Assert-Zip $Out '*Run-Rapportkit.ps1'
 $bundleHash = (Get-FileHash $Out -Algorithm SHA256).Hash
 Set-Content -Path "$Out.sha256" -Value ('{0} *{1}' -f $bundleHash, (Split-Path $Out -Leaf)) -Encoding ascii
-Write-Host ("Klart: {0} ({1:N0} MB)" -f $Out, ((Get-Item $Out).Length / 1MB)) -ForegroundColor Green
-Write-Host "SHA256: $bundleHash (sparad i $(Split-Path $Out -Leaf).sha256)"
+Write-Host ("Done: {0} ({1:N0} MB)" -f $Out, ((Get-Item $Out).Length / 1MB)) -ForegroundColor Green
+Write-Host "SHA256: $bundleHash (saved in $(Split-Path $Out -Leaf).sha256)"

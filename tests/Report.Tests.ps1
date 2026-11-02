@@ -19,6 +19,9 @@ BeforeAll {
     function Get-ModuleVersionText($n) { '1.0' }
 
     . (Join-Path $script:Root 'lib\Report.ps1')
+    # The existing page tests check the Swedish texts: the language is chosen by -ReportLanguage (here the script variable).
+    $script:ReportLanguage = 'sv'
+    [void](Initialize-Language 'sv')
     # Sidorna HTML-kodar svenska tecken (ö blir &#246;): avkoda innan texten jämförs.
     function Get-PageText([string]$File) { [System.Web.HttpUtility]::HtmlDecode((Get-Content (Join-Path $script:RunDir $File) -Raw)) }
 }
@@ -52,7 +55,7 @@ Describe 'Get-BrandTheme' {
     It 'faller tillbaka på inbyggd standard och varnar när temat saknas' {
         $t = Get-BrandTheme (Join-Path $TestDrive 'finns-inte')
         $t.Data.name | Should -Be 'Neutral'
-        $t.Source | Should -Be 'inbyggd standard'
+        $t.Source | Should -Be 'built-in default'
         $script:Warnings.Count | Should -Be 1
     }
     It 'byter ut ogiltiga färger mot standardvärdet och varnar' {
@@ -74,7 +77,7 @@ Describe 'Get-BrandTheme' {
     It 'tål trasig JSON' {
         $dir = Join-Path $TestDrive 'broken'; New-Item -ItemType Directory $dir | Out-Null
         '{ inte json' | Set-Content (Join-Path $dir 'theme.json')
-        (Get-BrandTheme $dir).Source | Should -Be 'inbyggd standard'
+        (Get-BrandTheme $dir).Source | Should -Be 'built-in default'
         $script:Warnings.Count | Should -BeGreaterThan 0
     }
 }
@@ -95,7 +98,7 @@ Describe 'New-ThemeCss' {
         $dir2 = Join-Path $TestDrive 'css2'; New-Item -ItemType Directory $dir2 | Out-Null
         '{ "name": "Ute", "customCss": "..\\css\\custom.css" }' | Set-Content (Join-Path $dir2 'theme.json') -Encoding utf8
         (New-ThemeCss (Get-BrandTheme $dir2)) | Should -Not -Match 'hotpink'
-        ($script:Warnings -join ' ') | Should -Match 'utanför temamappen'
+        ($script:Warnings -join ' ') | Should -Match 'outside the theme folder'
     }
 }
 
@@ -242,7 +245,7 @@ Describe 'Mörk logga och bakgrund' {
         '{ "name": "Bg2", "background": { "file": "finns-inte.png" } }' | Set-Content (Join-Path $dir 'theme.json') -Encoding utf8
         $script:Warnings.Clear()
         (New-ThemeCss (Get-BrandTheme $dir)) | Should -Not -Match 'body::before'
-        ($script:Warnings -join ' ') | Should -Match 'bakgrundsbild'
+        ($script:Warnings -join ' ') | Should -Match 'background image'
     }
 }
 
@@ -287,7 +290,7 @@ Describe 'Anonymisering' {
         $a | Should -Not -Match 'Kalle|Lisa|kund\.se'
         ([regex]::Matches($a, 'Användare 1')).Count | Should -Be 2
         $a | Should -Match 'Användare 2'
-        $a | Should -Match 'användare1@exempel\.invalid'
+        $a | Should -Match 'anvandare1@exempel\.invalid'
     }
     It 'byter ut e-post, GUID och onmicrosoft-adresser som inte samlats in, men rör inte taggar' {
         Register-AnonData @{}
@@ -367,7 +370,7 @@ Describe 'Sidan Struktur' {
         $role = @{}; foreach ($v in $m.Vnets) { $role[$v.Namn] = $m.Role[([string]$v.Id).ToLower()] }
         $role['vnet-hubben'] | Should -Be 'Hub'
         $role['vnet-spoke-a'] | Should -Be 'Spoke'
-        $role['vnet-ensam'] | Should -Be 'Isolerat'
+        $role['vnet-ensam'] | Should -Be 'Isolated'
     }
     It 'flaggar isolerade nät, ensidig peering och överlappande adressrymder' {
         $h = Get-PageText 'rapport-struktur.html'
@@ -389,5 +392,117 @@ Describe 'Sidan Struktur' {
         $rows = Get-MgRowsFromGovViz $d
         @($rows | Where-Object Typ -eq 'Managementgrupp').Count | Should -Be 2
         ($rows | Where-Object Id -eq 's1').Foralder | Should -Be 'mg1'
+    }
+}
+
+
+Describe 'Språkpaket (lang\)' {
+    BeforeAll {
+        $script:LangDir = Join-Path $script:ScriptRoot 'lang'
+        $script:Packs = @{}
+        foreach ($f in Get-ChildItem $script:LangDir -Filter '*.psd1') { $script:Packs[$f.BaseName] = Import-PowerShellDataFile $f.FullName }
+        function Get-Placeholders([string]$Text) { @([regex]::Matches($Text, '\{(\d+)(?::[^}]*)?\}') | ForEach-Object { $_.Groups[1].Value } | Sort-Object -Unique) -join ',' }
+    }
+    It 'har engelska som bas och svenska' {
+        $script:Packs.Keys | Should -Contain 'en'
+        $script:Packs.Keys | Should -Contain 'sv'
+    }
+    It 'har samma nycklar i varje språk som i engelskan' {
+        foreach ($code in $script:Packs.Keys) {
+            $missing = @($script:Packs['en'].Keys | Where-Object { -not $script:Packs[$code].ContainsKey($_) })
+            $extra = @($script:Packs[$code].Keys | Where-Object { -not $script:Packs['en'].ContainsKey($_) })
+            "${code}: saknar [$($missing -join ', ')]" | Should -Be "${code}: saknar []"
+            "${code}: extra [$($extra -join ', ')]" | Should -Be "${code}: extra []"
+        }
+    }
+    It 'använder samma platshållare i varje språk som i engelskan' {
+        foreach ($code in $script:Packs.Keys) {
+            foreach ($k in $script:Packs['en'].Keys) {
+                if (-not $script:Packs[$code].ContainsKey($k)) { continue }
+                "${code}/${k}: $(Get-Placeholders $script:Packs[$code][$k])" | Should -Be "${code}/${k}: $(Get-Placeholders $script:Packs['en'][$k])"
+            }
+        }
+    }
+    It 'har inga tomma texter, och HTML bara i nycklar som slutar på .html' {
+        foreach ($code in $script:Packs.Keys) {
+            foreach ($k in $script:Packs[$code].Keys) {
+                [string]$script:Packs[$code][$k] | Should -Not -BeNullOrEmpty -Because "${code}/${k}"
+                if ($k -notlike '*.html') { [string]$script:Packs[$code][$k] | Should -Not -Match '<[a-z/]' -Because "${code}/${k} är vanlig text och HTML-kodas av anroparen" }
+            }
+        }
+    }
+    It 'har alla nycklar som koden använder' {
+        $used = foreach ($f in Get-ChildItem (Join-Path $script:ScriptRoot 'lib') -Filter '*.ps1') {
+            [regex]::Matches((Get-Content $f.FullName -Raw), "\bT '([A-Za-z0-9_.]+)'") | ForEach-Object { $_.Groups[1].Value }
+        }
+        $used = @($used | Sort-Object -Unique | Where-Object { $_ -ne 'key' })
+        $used.Count | Should -BeGreaterThan 100
+        @($used | Where-Object { -not $script:Packs['en'].ContainsKey($_) }) | Should -BeNullOrEmpty
+    }
+    It 'T fyller i platshållare och ger nyckeln i hakparenteser när den saknas' {
+        [void](Initialize-Language 'sv')
+        (T 'fmt.xOfY' 3 5) | Should -Be '3 av 5'
+        (T 'finns.inte') | Should -Be '[finns.inte]'
+    }
+    It 'en nyckel som saknas i ett språk faller tillbaka på engelska' {
+        $dir = Join-Path $script:ScriptRoot 'lang'
+        $tmp = Join-Path $dir 'zz.psd1'
+        try {
+            "@{ 'tile.low' = 'Lågt' }" | Set-Content $tmp -Encoding utf8
+            Initialize-Language 'zz' | Should -Be 'zz'
+            (T 'tile.low') | Should -Be 'Lågt'
+            (T 'tile.medium') | Should -Be 'Medium'
+        }
+        finally { Remove-Item $tmp -ErrorAction SilentlyContinue; [void](Initialize-Language 'sv') }
+    }
+    It 'Initialize-Language varnar och använder engelska för okänt eller ogiltigt språk' {
+        $script:Warnings.Clear()
+        Initialize-Language 'xx' | Should -Be 'en'
+        Initialize-Language '..\x' | Should -Be 'en'
+        $script:Warnings.Count | Should -Be 2
+        Initialize-Language 'sv' | Should -Be 'sv'
+    }
+}
+
+Describe 'Rapporten på engelska' {
+    BeforeAll {
+        $script:RunDir = Join-Path ([IO.Path]::GetTempPath()) ([guid]::NewGuid().ToString())
+        New-Item -ItemType Directory $script:RunDir | Out-Null
+        $script:Dirs = @{ azqr = (Join-Path $script:RunDir 'azqr'); azgovviz = (Join-Path $script:RunDir 'azgovviz'); maester = (Join-Path $script:RunDir 'maester'); portal = (Join-Path $script:RunDir 'portal'); struktur = (Join-Path $script:RunDir 'struktur') }
+        foreach ($d in $script:Dirs.Values) { New-Item -ItemType Directory $d | Out-Null }
+        'Prenumeration,Plan,Niva', 'Prod,VirtualMachines,Standard', 'Prod,Containers,Free' | Set-Content (Join-Path $script:Dirs.portal 'defender-planer.csv') -Encoding utf8
+        'Id,Namn,Typ,Foralder', 'mg-a,Plattform,Managementgrupp,', 's1,Prod,Prenumeration,mg-a' | Set-Content (Join-Path $script:Dirs.struktur 'managementgrupper.csv') -Encoding utf8
+        $script:Status = [ordered]@{ azqr = @{ State = 'Fel'; Note = 'x' }; 'Defender och kostnad' = @{ State = 'OK'; Note = '' }; Struktur = @{ State = 'Partial'; Note = 'y' } }
+        $script:ReportLanguage = 'en'
+        $script:Index = Write-ReportSite
+    }
+    AfterAll { $script:ReportLanguage = 'sv'; [void](Initialize-Language 'sv'); Remove-Item $script:RunDir -Recurse -Force -ErrorAction SilentlyContinue }
+    It 'skriver sidorna med engelsk text och lang="en"' {
+        $html = Get-PageText 'rapport.html'
+        $html | Should -Match '<html lang="en">'
+        $html | Should -Match 'Pages in the report'
+        $html | Should -Match 'Save the whole report as PDF'
+        $html | Should -Not -Match 'Sidor i rapporten'
+        (Get-PageText 'rapport-defender-kostnad.html') | Should -Match 'Defender plans'
+        (Get-PageText 'rapport-struktur.html') | Should -Match 'Management groups and subscriptions'
+    }
+    It 'visar steg och status på engelska (gamla svenska värden förstås också)' {
+        $html = Get-PageText 'rapport-om.html'
+        $html | Should -Match 'Run status'
+        $html | Should -Match '<span class="pill failed">Failed</span>'
+        $html | Should -Match '<span class="pill partial">Partial</span>'
+        $html | Should -Match '<span class="pill ok">OK</span>'
+        $html | Should -Match 'Defender and cost'
+    }
+    It 'har inga nycklar som saknas på någon sida' {
+        foreach ($f in Get-ChildItem $script:RunDir -Filter '*.html') { (Get-PageText $f.Name) | Should -Not -Match '\[[a-z]+\.[A-Za-z0-9_.]+\]' -Because $f.Name }
+    }
+    It 'tar språket från temat när -ReportLanguage saknas' {
+        $script:ReportLanguage = $null
+        Resolve-ReportLanguage @{ Data = @{ language = 'sv' } } | Should -Be 'sv'
+        Resolve-ReportLanguage @{ Data = @{ language = '' } } | Should -Be 'en'
+        $script:ReportLanguage = 'sv'
+        Resolve-ReportLanguage @{ Data = @{ language = 'en' } } | Should -Be 'sv'
+        $script:ReportLanguage = 'en'
     }
 }

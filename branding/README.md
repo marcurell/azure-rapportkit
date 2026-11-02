@@ -1,71 +1,73 @@
-# Branding: utseendet på rapporten
+# Branding: the look of the report
 
-Rapportens utseende är **filerna i den här mappen**. Det finns ingen flagga och inget val: byter du filerna blir det ett
-nytt utseende.
+*Svenska: [README.sv.md](README.sv.md)*
+
+The look of the report is **the files in this folder**. There is no switch and no choice: replace the files and you get a new look.
 
 ```
 branding\
-  theme.json       <- färger, typsnitt, logga, sidfot (Moln på svenska följer med)
-  logo.svg         <- valfritt: en logga som bildfil (annars en ordbild av texten i theme.json)
-  logo-dark.svg    <- valfritt: logga för mörkt läge
-  bakgrund.jpg     <- valfritt: bakgrundsbild
-  custom.css       <- valfritt: egna CSS-regler som läggs sist
+  theme.json       <- colours, fonts, logo, footer, report language (Moln på svenska is included)
+  logo.svg         <- optional: a logo as an image file (otherwise a wordmark of the text in theme.json)
+  logo-dark.svg    <- optional: logo for dark mode
+  background.jpg   <- optional: background image
+  custom.css       <- optional: your own CSS rules, added last
 ```
 
-## Så gör du en kundversion med en annan profil
+## How to make a customer version with another profile
 
-1. Gör en mapp med din profil (kopiera `..\branding-exempel\neutral\theme.json` som utgångspunkt, ändra och lägg till logga).
-2. Kör `.\Pack-Kit.ps1 -Branding D:\profiler\kund\branding`. Det ger en zip av kitet där `branding\` är din mapp.
-3. Ge zippen till kunden. Rapporten får exakt den profil som ligger i zippen.
+1. Make a folder with your profile (copy `..\branding-exempel\neutral\theme.json` as a starting point, change it and add a logo).
+2. Run `.\Pack-Kit.ps1 -Branding D:\profiles\customer\branding` (add `-Language sv` for a Swedish report). That gives a zip of the kit where `branding\` is your folder.
+3. Give the zip to the customer. The report gets exactly the profile that is in the zip.
 
-Vill du bara testa utseendet på en befintlig körning utan att köra verktygen igen: byt filerna i `branding\` och kör
-`.\Run-Rapportkit.ps1 -ReportOnly -Period <år-månad>`.
+If you only want to test the look on an existing run without running the tools again: replace the files in `branding\` and run
+`.\Run-Rapportkit.ps1 -ReportOnly -Period <year-month>`.
 
-Saknas `theme.json` eller är något ogiltigt faller rapporten tillbaka på inbyggda standardvärden och scriptet skriver en
-varning. Det blir aldrig en trasig rapport.
+If `theme.json` is missing or something is invalid, the report falls back on built-in defaults and the script writes a
+warning. You never get a broken report.
 
 ## theme.json
 
-| Fält | Betydelse |
+| Field | Meaning |
 |---|---|
-| `name` | Temats namn (visas under "Om körningen") |
-| `reportTitle` | Rapportens titel i sidhuvudet |
-| `logo` | Se nedan |
-| `colors.light`, `colors.dark` | Färgpalett för ljust respektive mörkt läge (följer läsarens inställning). Utskrift använder alltid ljust |
-| `colors.status` | Färger för `high`, `medium`, `low` och `ok` (etiketter och kort) |
-| `fonts.body`, `fonts.heading` | Typsnittslistor (CSS `font-family`). Typsnitt som inte finns på läsarens dator ersätts av nästa i listan |
-| `footer` | Text i sidfoten |
-| `contact` | `text` och `url` för en kontaktlänk i sidfoten (lämna tomt för att utelämna) |
-| `background` | `file` (bild i mappen, högst 500 KB) och `opacity` (0 till 1, standard 0,08). Visas bakom innehållet, inte vid utskrift |
-| `customCss` | Filnamn på en CSS-fil i mappen (valfritt) |
+| `name` | Name of the theme (shown under "About the run") |
+| `reportTitle` | Title of the report in the page header |
+| `language` | Language of the report text (`en` or `sv`, a pack in `..\lang\`). `-ReportLanguage` on the script overrides it. Empty = English |
+| `logo` | See below |
+| `colors.light`, `colors.dark` | Colour palette for light and dark mode (follows the reader's setting). Printing always uses light |
+| `colors.status` | Colours for `high`, `medium`, `low` and `ok` (labels and cards) |
+| `fonts.body`, `fonts.heading` | Font lists (CSS `font-family`). A font that does not exist on the reader's computer is replaced by the next in the list |
+| `footer` | Text in the page footer |
+| `contact` | `text` and `url` for a contact link in the footer (leave empty to omit) |
+| `background` | `file` (image in the folder, at most 500 KB) and `opacity` (0 to 1, default 0.08). Shown behind the content, not when printing |
+| `customCss` | File name of a CSS file in the folder (optional) |
 
-Färger i `colors.*`: `bg`, `surface`, `surfaceAlt`, `border`, `text`, `muted`, `accent` (profilfärg), `accentText`
-(profilfärg för text och länkar, måste vara läsbar mot `surface`) och `onAccent` (text ovanpå profilfärgen). Värden
-kan vara `#rrggbb`, `rgb(...)`, `hsl(...)` eller ett färgnamn.
+Colours in `colors.*`: `bg`, `surface`, `surfaceAlt`, `border`, `text`, `muted`, `accent` (profile colour), `accentText`
+(profile colour for text and links, must be readable against `surface`) and `onAccent` (text on top of the profile colour). Values
+can be `#rrggbb`, `rgb(...)`, `hsl(...)` or a colour name.
 
-### Logga
+### Logo
 
-Antingen en **ordbild** (text i färger), som Moln på svenska:
+Either a **wordmark** (text in colours), like Moln på svenska:
 
 ```json
 "logo": { "type": "wordmark", "parts": [ { "text": "Molnpå", "color": "text" }, { "text": "svenska", "color": "accent" } ] }
 ```
 
-(`color` är `text`, `accent`, `accentText` eller `muted`.) Eller en **bildfil** i mappen (svg, png, jpg, gif eller
-webp, högst 300 KB). Den bäddas in i varje sida, så rapporten är fristående:
+(`color` is `text`, `accent`, `accentText` or `muted`.) Or an **image file** in the folder (svg, png, jpg, gif or
+webp, at most 300 KB). It is embedded in every page, so the report is self-contained:
 
 ```json
-"logo": { "type": "image", "file": "logo.svg", "fileDark": "logo-dark.svg", "alt": "Företagsnamn", "height": 36 }
+"logo": { "type": "image", "file": "logo.svg", "fileDark": "logo-dark.svg", "alt": "Company name", "height": 36 }
 ```
 
-`fileDark` är valfri: en logga som visas i stället när läsaren använder mörkt läge (till exempel en vit variant).
+`fileDark` is optional: a logo that is shown instead when the reader uses dark mode (for example a white variant).
 
-## Tänk på
+## Keep in mind
 
-- **Rättigheter:** använd bara ett varumärke (namn, logga, färger) som du har rätt att använda. En profil för någon
-  annans varumärke, till exempel en kunds eller en arbetsgivares, kräver deras tillstånd. Lägg den inte i det publika repot:
-  använd `Pack-Kit.ps1` med en mapp utanför repot.
-- **Profil från okänd källa:** `theme.json` valideras (färger och typsnitt kontrolleras, och bara kända färgnamn tillåts i
-  loggan), men `custom.css` läggs in som den är. Granska den innan du använder en profil du inte skrivit själv.
-- **Typsnitt:** rapporten bäddar inte in typsnittsfiler (de skulle göra varje sida flera hundra kB större). Moln på
-  svenska använder Inter, och datorer utan Inter visar det nästa typsnittet i listan (Segoe UI).
+- **Rights:** only use a brand (name, logo, colours) that you have the right to use. A profile for someone
+  else's brand, for example a customer's or an employer's, requires their permission. Do not put it in the public repo:
+  use `Pack-Kit.ps1` with a folder outside the repo.
+- **A profile from an unknown source:** `theme.json` is validated (colours and fonts are checked, and only known colour names are allowed in
+  the logo), but `custom.css` is included as it is. Review it before you use a profile you did not write yourself.
+- **Fonts:** the report does not embed font files (they would make every page several hundred kB larger). Moln på
+  svenska uses Inter, and computers without Inter show the next font in the list (Segoe UI).

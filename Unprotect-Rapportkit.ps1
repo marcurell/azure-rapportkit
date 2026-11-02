@@ -1,15 +1,15 @@
 ﻿<#
 .SYNOPSIS
-  Packar upp ett lösenordsskyddat rapportpaket (.rkenc) från Azure Rapportkit.
+  Unpacks a password-protected report package (.rkenc) from Azure Rapportkit.
 .DESCRIPTION
-  Frågar efter lösenordet, kontrollerar att filen är oskadd och packar upp rapporten i en mapp bredvid filen.
-  Fungerar i både Windows PowerShell 5.1 och PowerShell 7. Inget skickas någonstans.
+  Asks for the password, checks that the file is intact and unpacks the report in a folder next to the file.
+  Works in both Windows PowerShell 5.1 and PowerShell 7. Nothing is sent anywhere.
 .PARAMETER Path
-  Den krypterade filen, till exempel rapportkit_00000000_2026-10.zip.rkenc.
+  The encrypted file, for example rapportkit_00000000_2026-10.zip.rkenc.
 .PARAMETER Destination
-  Mapp att packa upp i. Standard: en mapp med filens namn bredvid filen.
+  Folder to unpack into. Default: a folder named after the file, next to the file.
 .PARAMETER KeepZip
-  Spara även den dekrypterade zip-filen.
+  Also keep the decrypted zip file.
 .EXAMPLE
   .\Unprotect-Rapportkit.ps1 -Path C:\Temp\rapportkit_00000000_2026-10.zip.rkenc
 #>
@@ -24,18 +24,18 @@ $ErrorActionPreference = 'Stop'
 . (Join-Path (Split-Path -Parent $PSCommandPath) 'lib\Crypto.ps1')
 
 try {
-    if (-not (Test-Path -LiteralPath $Path -PathType Leaf)) { throw "Hittar inte filen: $Path" }
+    if (-not (Test-Path -LiteralPath $Path -PathType Leaf)) { throw "Cannot find the file: $Path" }
     $Path = (Resolve-Path -LiteralPath $Path).Path
     $sha = Join-Path (Split-Path $Path -Parent) ((Split-Path $Path -Leaf) + '.sha256')
     if (Test-Path -LiteralPath $sha) {
         $expected = ((Get-Content -LiteralPath $sha -Raw).Trim() -split '\s+')[0]
         $actual = (Get-FileHash -LiteralPath $Path -Algorithm SHA256).Hash
-        if ($expected -ne $actual) { throw 'Kontrollsumman (SHA256) stämmer inte med .sha256-filen: filen har ändrats eller skadats under överföringen.' }
-        Write-Host 'Kontrollsumman stämmer.' -ForegroundColor Green
+        if ($expected -ne $actual) { throw 'The checksum (SHA256) does not match the .sha256 file: the file has been modified or damaged in transfer.' }
+        Write-Host 'The checksum matches.' -ForegroundColor Green
     }
-    if (-not $Password) { $Password = Read-Host 'Lösenord' -AsSecureString }
+    if (-not $Password) { $Password = Read-Host 'Password' -AsSecureString }
     if (-not $Destination) { $Destination = Join-Path (Split-Path $Path -Parent) ((Split-Path $Path -Leaf) -replace '\.zip\.rkenc$|\.rkenc$', '') }
-    if ((Test-Path -LiteralPath $Destination) -and (Get-ChildItem -LiteralPath $Destination -Force | Select-Object -First 1)) { throw "Målmappen finns redan och är inte tom: $Destination (välj en annan med -Destination)." }
+    if ((Test-Path -LiteralPath $Destination) -and (Get-ChildItem -LiteralPath $Destination -Force | Select-Object -First 1)) { throw "The destination folder already exists and is not empty: $Destination (choose another with -Destination)." }
 
     $zip = Join-Path ([System.IO.Path]::GetTempPath()) ('rapportkit-' + [guid]::NewGuid().ToString('N') + '.zip')
     try {
@@ -46,10 +46,10 @@ try {
     }
     finally { Remove-Item -LiteralPath $zip -Force -ErrorAction SilentlyContinue }
 
-    Write-Host "Uppackat i: $Destination" -ForegroundColor Green
-    Write-Host 'Öppna rapport.html i mappen.'
+    Write-Host "Unpacked in: $Destination" -ForegroundColor Green
+    Write-Host 'Open rapport.html in the folder.'
 }
 catch {
-    Write-Host "FEL: $($_.Exception.Message)" -ForegroundColor Red
+    Write-Host "ERROR: $($_.Exception.Message)" -ForegroundColor Red
     exit 1
 }

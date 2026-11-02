@@ -1,45 +1,59 @@
 ﻿<#
 .SYNOPSIS
-  Packar kitet i en zip-fil att ge till en kund, med valfri egen branding.
+  Packs the kit in a zip file to give to a customer, with optional branding of your own.
 .DESCRIPTION
-  Rapportens utseende är filerna i mappen branding\ (theme.json, logga, bakgrund, custom.css). Det finns ingen flagga för
-  att välja tema: det som ligger i branding\ i zippen är det som används. Pack-Kit.ps1 gör en zip av kitet där branding\
-  ersatts av innehållet i en annan mapp, så att kundens rapport får din profil utan att du ändrar något i repot.
+  The look of the report is the files in the folder branding\ (theme.json, logo, background, custom.css). There is no switch
+  for choosing a theme: what is in branding\ in the zip is what is used. Pack-Kit.ps1 makes a zip of the kit where branding\
+  is replaced by the content of another folder, so that the customer's report gets your profile without you changing anything in the repo.
 
-  Kör från en uppackad version av kitet (eller en klon av repot). Zippen är en KUNDVERSION: den innehåller scriptet,
-  lib\, branding\, kundens README (docs\kund\README.md, som README.md), kundguiden (Word), docs\KUNDINFO.md och
-  licensfilerna, men inget som pekar på repot (repots README, Unprotect-Rapportkit.ps1, Pack-Kit.ps1) och aldrig tests\,
-  .git\ eller några resultat. Kunden får alltså ett paket som går att packa upp och köra utan att något hämtas från ditt repo.
+  Run it from an unpacked version of the kit (or a clone of the repo). The zip is a CUSTOMER VERSION: it contains the script,
+  lib\, lang\, branding\, the customer README (docs\kund\README.md, as README.md), the customer guide (Word), docs\KUNDINFO.md and
+  the licence files, but nothing that points to the repo (the repo README, Unprotect-Rapportkit.ps1, Pack-Kit.ps1) and never tests\,
+  .git\ or any results. The customer thus gets a package that can be unpacked and run without anything being fetched from your repo.
 .PARAMETER Branding
-  Mapp vars innehåll blir branding\ i zippen. Måste innehålla theme.json. Utan den används kitets egen branding\.
+  Folder whose content becomes branding\ in the zip. Must contain theme.json. Without it the kit's own branding\ is used.
+.PARAMETER Language
+  Language of the report text in the zip: the code of a language pack in lang\ (en, sv). Written as "language" in theme.json in
+  the zip, so the customer gets the report in that language without choosing anything. It also picks the language of the
+  customer README, KUNDINFO and guide. Without it what is already in theme.json applies (and otherwise English). The customer
+  can still change the report language with -ReportLanguage.
 .PARAMETER Out
-  Zip-fil att skapa. Standard: azure-rapportkit-<version>[-<mappnamn>].zip i aktuell mapp.
+  Zip file to create. Default: azure-rapportkit-<version>[-<folder name>].zip in the current folder.
 .EXAMPLE
   .\Pack-Kit.ps1 -Branding D:\profiler\orange\branding
+.EXAMPLE
+  .\Pack-Kit.ps1 -Branding D:\profiler\orange\branding -Language sv
 #>
 [CmdletBinding()]
 param(
     [string]$Branding,
+    [ValidatePattern('^[a-z]{2,3}(-[A-Za-z]{2,4})?$')]
+    [string]$Language,
     [string]$Out
 )
 $ErrorActionPreference = 'Stop'
 Add-Type -AssemblyName System.IO.Compression.FileSystem
 
 $root = Split-Path -Parent $PSCommandPath
+. (Join-Path $root 'lib\Packaging.ps1')
 $main = Join-Path $root 'Run-Rapportkit.ps1'
-if (-not (Test-Path -LiteralPath $main)) { throw "Hittar inte Run-Rapportkit.ps1 i $root. Kör Pack-Kit.ps1 från kitets mapp." }
+if (-not (Test-Path -LiteralPath $main)) { throw "Cannot find Run-Rapportkit.ps1 in $root. Run Pack-Kit.ps1 from the kit folder." }
 $version = ([regex]::Match((Get-Content -LiteralPath $main -Raw -Encoding UTF8), "\`$KitVersion\s*=\s*'([^']+)'")).Groups[1].Value
-if (-not $version) { throw 'Hittar inte versionsnumret i Run-Rapportkit.ps1.' }
+if (-not $version) { throw 'Cannot find the version number in Run-Rapportkit.ps1.' }
 
 $brandSource = Join-Path $root 'branding'
 $suffix = ''
 if ($Branding) {
     $brandSource = (Resolve-Path -LiteralPath $Branding).Path
-    if (-not (Test-Path -LiteralPath (Join-Path $brandSource 'theme.json'))) { throw "$brandSource innehåller ingen theme.json." }
+    if (-not (Test-Path -LiteralPath (Join-Path $brandSource 'theme.json'))) { throw "$brandSource contains no theme.json." }
     try { [void](Get-Content -LiteralPath (Join-Path $brandSource 'theme.json') -Raw -Encoding UTF8 | ConvertFrom-Json) }
-    catch { throw "theme.json i $brandSource är inte giltig JSON: $($_.Exception.Message)" }
+    catch { throw "theme.json in $brandSource is not valid JSON: $($_.Exception.Message)" }
     $leaf = Split-Path (Split-Path $brandSource -Parent) -Leaf
     if ($leaf -match '^[A-Za-z0-9_-]+$') { $suffix = "-$leaf" }
+}
+if ($Language -and -not (Test-Path -LiteralPath (Join-Path $root "lang\$Language.psd1"))) {
+    $have = @(Get-ChildItem -LiteralPath (Join-Path $root 'lang') -Filter '*.psd1' -ErrorAction SilentlyContinue | ForEach-Object { $_.BaseName }) -join ', '
+    throw "There is no language pack '$Language' in lang\ (available: $have)."
 }
 if (-not $Out) { $Out = Join-Path (Get-Location) "azure-rapportkit-$version$suffix.zip" }
 
@@ -51,19 +65,18 @@ try {
         if (Test-Path -LiteralPath (Join-Path $root $f)) { Copy-Item -LiteralPath (Join-Path $root $f) $stage }
     }
     Copy-Item -LiteralPath (Join-Path $root 'lib') (Join-Path $stage 'lib') -Recurse
-    # Kundens dokument: README.md i zippen är kundversionen (scriptets felmeddelanden hänvisar till README), inte repots.
-    $kund = Join-Path $root 'docs\kund'
-    if (-not (Test-Path -LiteralPath (Join-Path $kund 'README.md'))) { throw "Hittar inte kundens README ($kund\README.md)." }
-    Copy-Item -LiteralPath (Join-Path $kund 'README.md') (Join-Path $stage 'README.md')
-    New-Item -ItemType Directory -Force (Join-Path $stage 'docs') | Out-Null
-    Copy-Item -LiteralPath (Join-Path $root 'docs\KUNDINFO.md') (Join-Path $stage 'docs')
-    Get-ChildItem -LiteralPath $kund -Filter '*.docx' | Copy-Item -Destination (Join-Path $stage 'docs')
+    Copy-Item -LiteralPath (Join-Path $root 'lang') (Join-Path $stage 'lang') -Recurse
     Copy-Item -LiteralPath $brandSource -Destination (Join-Path $stage 'branding') -Recurse
+    # Sets "language" in the theme.json of the zip (the source folder is not touched).
+    if ($Language) { Set-ThemeLanguage (Join-Path $stage 'branding\theme.json') $Language }
+    # The customer's documents: README.md in the zip is the customer version (the script's error messages refer to the README), not the repo's.
+    $docLanguage = Copy-CustomerDocs $root $stage $Language
     if (Test-Path -LiteralPath $Out) { Remove-Item -LiteralPath $Out -Force }
     [System.IO.Compression.ZipFile]::CreateFromDirectory($stageRoot, $Out)
 }
 finally { Remove-Item -LiteralPath $stageRoot -Recurse -Force -ErrorAction SilentlyContinue }
 
 $mb = (Get-Item -LiteralPath $Out).Length / 1MB
-Write-Host ('Skapade {0} ({1:N1} MB), version {2}, branding från: {3}' -f $Out, $mb, $version, $brandSource) -ForegroundColor Green
-Write-Host 'Mottagaren packar upp zippen, högerklickar på Run-Rapportkit.ps1 > Egenskaper > Avblockera (eller kör Get-ChildItem -Recurse | Unblock-File) och kör scriptet.'
+$langText = ", documents: $docLanguage" + $(if ($Language) { ", report language: $Language" } else { '' })
+Write-Host ('Created {0} ({1:N1} MB), version {2}, branding from: {3}{4}' -f $Out, $mb, $version, $brandSource, $langText) -ForegroundColor Green
+Write-Host 'The recipient unpacks the zip, right-clicks Run-Rapportkit.ps1 > Properties > Unblock (or runs Get-ChildItem -Recurse | Unblock-File) and runs the script.'
