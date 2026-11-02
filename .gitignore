@@ -12,5 +12,3 @@ test-results/
 # Lokala säkerhetskopior
 *.bak*
 
-# Egna teman som inte ska med i repot (se branding/README.md)
-branding-local/

@@ -196,3 +196,29 @@ Describe 'Azure CLI utan winget och valfri kryptering' {
         $script:Src | Should -Match '-not \$NoEncrypt -and -not \$ZipPassword -and -not \$Yes'
     }
 }
+
+Describe 'Branding: en mapp, ingen flagga' {
+    It 'scriptet har varken -Brand eller -BrandPath' {
+        $ast = [System.Management.Automation.Language.Parser]::ParseFile($script:ScriptPath, [ref]$null, [ref]$null)
+        $names = $ast.ParamBlock.Parameters.Name.VariablePath.UserPath
+        $names | Should -Not -Contain 'Brand'
+        $names | Should -Not -Contain 'BrandPath'
+    }
+    It 'Pack-Kit.ps1 byter ut branding\ i zippen och tar inte med tests eller .git' {
+        $b = Join-Path $TestDrive 'minprofil\branding'; New-Item -ItemType Directory -Force $b | Out-Null
+        '{ "name": "Min profil" }' | Set-Content (Join-Path $b 'theme.json') -Encoding utf8
+        $zip = Join-Path $TestDrive 'kit.zip'
+        & (Join-Path $PSScriptRoot '..\Pack-Kit.ps1') -Branding $b -Out $zip | Out-Null
+        $dest = Join-Path $TestDrive 'kit'; Expand-Archive $zip $dest
+        $kit = Get-ChildItem $dest -Directory | Select-Object -First 1
+        (Get-Content (Join-Path $kit.FullName 'branding\theme.json') -Raw) | Should -Match 'Min profil'
+        Test-Path (Join-Path $kit.FullName 'Run-Rapportkit.ps1') | Should -BeTrue
+        Test-Path (Join-Path $kit.FullName 'lib\Report.ps1') | Should -BeTrue
+        Test-Path (Join-Path $kit.FullName 'tests') | Should -BeFalse
+        Test-Path (Join-Path $kit.FullName '.git') | Should -BeFalse
+    }
+    It 'Pack-Kit.ps1 avvisar en mapp utan theme.json' {
+        $b = Join-Path $TestDrive 'tom'; New-Item -ItemType Directory $b | Out-Null
+        { & (Join-Path $PSScriptRoot '..\Pack-Kit.ps1') -Branding $b -Out (Join-Path $TestDrive 'x.zip') } | Should -Throw '*theme.json*'
+    }
+}

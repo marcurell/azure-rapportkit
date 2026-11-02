@@ -6,7 +6,7 @@
   och sina ikoner från en server på internet, och Maester har sin egen mall och logga), så rapporten sammanställer datan
   på egna sidor och länkar till verktygens rapporter som fördjupning, i nytt fönster.
 
-  Utseendet styrs av ett tema (branding\<namn>\theme.json, se branding\README.md): färger, typsnitt, logga och sidfot.
+  Utseendet styrs av filerna i mappen branding\ (theme.json m.fl., se branding\README.md): färger, typsnitt, logga och sidfot.
   Varje sida är fristående (CSS och logga ligger inbäddade), så den går att öppna utan att resten finns.
 
   Filen läses in (dot-source) av Run-Rapportkit.ps1 i steg 10 och använder dess variabler ($Dirs, $RunDir, $Status,
@@ -92,27 +92,14 @@ $script:DefaultThemeJson = @'
 }
 '@
 
-# Läser temat: -BrandPath (en mapp) eller -Brand (en mapp under branding\). Värden som saknas fylls i från reservtemat, och
-# ogiltiga färger och typsnitt byts ut (med varning). Ger @{ Data; Dir; Source }. Ger aldrig fel: i värsta fall används reservtemat.
-function Get-BrandTheme([string]$Brand, [string]$BrandPath) {
+# Läser temat i mappen $Dir (standard: branding\ bredvid scriptet). Temat är filerna i den mappen: theme.json plus valfria
+# bilder och custom.css. Byts filerna ut blir det ett nytt tema. Värden som saknas fylls i från reservtemat, och ogiltiga
+# färger och typsnitt byts ut (med varning). Ger @{ Data; Dir; Source }. Ger aldrig fel: i värsta fall används reservtemat.
+function Get-BrandTheme([string]$Dir) {
     $default = { ConvertTo-Hashtable ($script:DefaultThemeJson | ConvertFrom-Json) }
     $theme = & $default
-    $dir = $null
+    $dir = if ($Dir) { $Dir } else { Join-Path $ScriptRoot 'branding' }
     $source = 'inbyggd standard'
-    if ($BrandPath) { $dir = $BrandPath }
-    elseif ($Brand) {
-        if ($Brand -notmatch '^[A-Za-z0-9_-]+$') { Add-Warning "Ogiltigt temanamn '$Brand' (bara bokstäver, siffror, - och _). Använder inbyggd standard." }
-        else {
-            # Temat letas upp i tur och ordning: branding-local\ bredvid scriptet (ingår aldrig i repot), den egna temamappen
-            # %USERPROFILE%\.rapportkit\themes\ (överlever nya versioner av kitet) och sist branding\ som följer med kitet.
-            $roots = @((Join-Path $ScriptRoot 'branding-local'), (Join-Path $env:USERPROFILE '.rapportkit\themes'), (Join-Path $ScriptRoot 'branding'))
-            foreach ($r in $roots) {
-                $cand = Join-Path $r $Brand
-                if (Test-Path -LiteralPath (Join-Path $cand 'theme.json')) { $dir = $cand; break }
-            }
-            if (-not $dir) { $dir = Join-Path $roots[-1] $Brand }
-        }
-    }
     if ($dir) {
         $file = Join-Path $dir 'theme.json'
         if (Test-Path -LiteralPath $file) {
@@ -764,7 +751,7 @@ $autoPrint
 
 # Bygger hela rapporten och skriver sidorna i resultatmappen. Ger sökvägen till startsidan (rapport.html).
 function Write-ReportSite {
-    $theme = Get-BrandTheme $Brand $BrandPath
+    $theme = Get-BrandTheme $BrandingDir     # $BrandingDir sätts bara av testerna; annars används branding\
     $pages = @(
         @{ Key = 'oversikt'; File = 'rapport.html'; Title = 'Översikt'; Lead = 'Läget i miljön, sammanfattat från verktygens resultat.' },
         @{ Key = 'styrning'; File = 'rapport-styrning.html'; Title = 'Styrning'; Lead = 'Prenumerationer, behörigheter och policys. Sammanställt från Azure Governance Visualizer.' },

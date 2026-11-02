@@ -64,7 +64,7 @@ Rapportsidorna som scriptet skapar (`rapport*.html`) är fristående: stil, logg
 
 Undantaget är **Azure Governance Visualizers egen rapport** (filen `AzGovViz_*.html` i mappen `azgovviz\`, som rapporten länkar till som fördjupning). Den är inte fristående: när den öppnas hämtar webbläsaren dess formatmall, skript och ikoner från internet, bland annat `www.azadvertizer.net`, `cdnjs.cloudflare.com` och `code.jquery.com`. Det innebär att den inte visas rätt utan internetåtkomst, och att dessa adresser får se webbläsarens anrop. Vill ni undvika det: öppna inte den filen, utan använd sammanställningen på rapportsidan Styrning (som bygger på samma data) eller ta bort filen innan resultatet delas.
 
-Rapportens utseende (färger, logga, sidfot) styrs av ett tema som kan bytas, se `branding\README.md`.
+Rapportens utseende (färger, logga, sidfot) styrs av filerna i mappen `branding\`, se `branding\README.md`.
 
 ## Hur resultatet lämnas över
 

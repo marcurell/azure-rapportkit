@@ -39,31 +39,26 @@ Describe 'Test-CssColor och Test-CssFont' {
 
 Describe 'Get-BrandTheme' {
     BeforeEach { $script:Warnings.Clear() }
-    It 'läser temat molnpasvenska ur branding\' {
-        $t = Get-BrandTheme 'molnpasvenska' $null
+    It 'läser temat i branding\ (Moln på svenska)' {
+        $t = Get-BrandTheme
         $t.Data.name | Should -Be 'Moln på svenska'
         $t.Data.colors.light.accent | Should -Be '#f97316'
         $t.Data.colors.dark.bg | Should -Be '#060f09'
         $script:Warnings.Count | Should -Be 0
     }
     It 'läser det neutrala temat' {
-        (Get-BrandTheme 'neutral' $null).Data.name | Should -Be 'Neutral'
+        (Get-BrandTheme (Join-Path $script:ScriptRoot 'branding-exempel\neutral')).Data.name | Should -Be 'Neutral'
     }
     It 'faller tillbaka på inbyggd standard och varnar när temat saknas' {
-        $t = Get-BrandTheme 'finns-inte' $null
+        $t = Get-BrandTheme (Join-Path $TestDrive 'finns-inte')
         $t.Data.name | Should -Be 'Neutral'
         $t.Source | Should -Be 'inbyggd standard'
         $script:Warnings.Count | Should -Be 1
     }
-    It 'nekar temanamn med sökvägstecken (ingen path traversal)' {
-        $t = Get-BrandTheme '..\..\Windows' $null
-        $t.Source | Should -Be 'inbyggd standard'
-        $script:Warnings[0] | Should -Match 'Ogiltigt temanamn'
-    }
     It 'byter ut ogiltiga färger mot standardvärdet och varnar' {
         $dir = Join-Path $TestDrive 'bad'; New-Item -ItemType Directory $dir | Out-Null
         '{ "name": "Dåligt", "colors": { "light": { "accent": "red; } body{display:none" } } }' | Set-Content (Join-Path $dir 'theme.json') -Encoding utf8
-        $t = Get-BrandTheme $null $dir
+        $t = Get-BrandTheme $dir
         $t.Data.name | Should -Be 'Dåligt'
         $t.Data.colors.light.accent | Should -Be '#0969da'
         ($script:Warnings -join ' ') | Should -Match 'colors.light.accent'
@@ -71,7 +66,7 @@ Describe 'Get-BrandTheme' {
     It 'fyller i värden som saknas i ett ofullständigt tema' {
         $dir = Join-Path $TestDrive 'partial'; New-Item -ItemType Directory $dir | Out-Null
         '{ "name": "Delvis", "colors": { "light": { "accent": "#ff00aa" } } }' | Set-Content (Join-Path $dir 'theme.json') -Encoding utf8
-        $t = Get-BrandTheme $null $dir
+        $t = Get-BrandTheme $dir
         $t.Data.colors.light.accent | Should -Be '#ff00aa'
         $t.Data.colors.light.bg | Should -Be '#f6f8fa'
         $t.Data.colors.dark.text | Should -Be '#e6edf3'
@@ -79,7 +74,7 @@ Describe 'Get-BrandTheme' {
     It 'tål trasig JSON' {
         $dir = Join-Path $TestDrive 'broken'; New-Item -ItemType Directory $dir | Out-Null
         '{ inte json' | Set-Content (Join-Path $dir 'theme.json')
-        (Get-BrandTheme $null $dir).Source | Should -Be 'inbyggd standard'
+        (Get-BrandTheme $dir).Source | Should -Be 'inbyggd standard'
         $script:Warnings.Count | Should -BeGreaterThan 0
     }
 }
@@ -87,7 +82,7 @@ Describe 'Get-BrandTheme' {
 Describe 'New-ThemeCss' {
     BeforeEach { $script:Warnings.Clear() }
     It 'innehåller temats variabler för ljust, mörkt och utskrift' {
-        $css = New-ThemeCss (Get-BrandTheme 'molnpasvenska' $null)
+        $css = New-ThemeCss (Get-BrandTheme)
         $css | Should -Match '--rk-accent:#f97316'
         $css | Should -Match '@media \(prefers-color-scheme:dark\)\{:root\{--rk-bg:#060f09'
         $css | Should -Match '@media print\{:root\{--rk-bg:#f0f5f1'
@@ -96,10 +91,10 @@ Describe 'New-ThemeCss' {
         $dir = Join-Path $TestDrive 'css'; New-Item -ItemType Directory $dir | Out-Null
         '{ "name": "Css", "customCss": "custom.css" }' | Set-Content (Join-Path $dir 'theme.json') -Encoding utf8
         '.rk-top{outline:2px solid hotpink}' | Set-Content (Join-Path $dir 'custom.css')
-        (New-ThemeCss (Get-BrandTheme $null $dir)) | Should -Match 'hotpink'
+        (New-ThemeCss (Get-BrandTheme $dir)) | Should -Match 'hotpink'
         $dir2 = Join-Path $TestDrive 'css2'; New-Item -ItemType Directory $dir2 | Out-Null
         '{ "name": "Ute", "customCss": "..\\css\\custom.css" }' | Set-Content (Join-Path $dir2 'theme.json') -Encoding utf8
-        (New-ThemeCss (Get-BrandTheme $null $dir2)) | Should -Not -Match 'hotpink'
+        (New-ThemeCss (Get-BrandTheme $dir2)) | Should -Not -Match 'hotpink'
         ($script:Warnings -join ' ') | Should -Match 'utanför temamappen'
     }
 }
@@ -107,7 +102,7 @@ Describe 'New-ThemeCss' {
 Describe 'Get-LogoHtml' {
     BeforeEach { $script:Warnings.Clear() }
     It 'bygger ordbilden som ETT element med färgade delar' {
-        $html = Get-LogoHtml (Get-BrandTheme 'molnpasvenska' $null)
+        $html = Get-LogoHtml (Get-BrandTheme)
         $html | Should -Match '^<span class="rk-wm">'
         $html | Should -Match 'rk-w-accent">svenska'
         ([regex]::Matches($html, '<span class="rk-wm">')).Count | Should -Be 1
@@ -116,14 +111,14 @@ Describe 'Get-LogoHtml' {
         $dir = Join-Path $TestDrive 'logo'; New-Item -ItemType Directory $dir | Out-Null
         '<svg xmlns="http://www.w3.org/2000/svg" width="10" height="10"/>' | Set-Content (Join-Path $dir 'logo.svg')
         '{ "name": "Bild", "logo": { "type": "image", "file": "logo.svg", "alt": "Min <logga>" } }' | Set-Content (Join-Path $dir 'theme.json') -Encoding utf8
-        $html = Get-LogoHtml (Get-BrandTheme $null $dir)
+        $html = Get-LogoHtml (Get-BrandTheme $dir)
         $html | Should -Match 'src="data:image/svg\+xml;base64,'
         $html | Should -Match 'alt="Min &lt;logga&gt;"'
     }
     It 'faller tillbaka på ordbild när loggan saknas eller ligger utanför temamappen' {
         $dir = Join-Path $TestDrive 'logo2'; New-Item -ItemType Directory $dir | Out-Null
         '{ "name": "Saknas", "logo": { "type": "image", "file": "..\\..\\x.png" } }' | Set-Content (Join-Path $dir 'theme.json') -Encoding utf8
-        (Get-LogoHtml (Get-BrandTheme $null $dir)) | Should -Match 'rk-wm'
+        (Get-LogoHtml (Get-BrandTheme $dir)) | Should -Match 'rk-wm'
         $script:Warnings.Count | Should -BeGreaterThan 0
     }
 }
@@ -179,7 +174,7 @@ Describe 'Write-ReportSite (sidbygge)' {
         $script:HidePersonalData = $false; $script:LatestTools = $false
         $script:Status = [ordered]@{ azqr = @{ State = 'OK'; Note = '' }; Maester = @{ State = 'OK'; Note = '' } }
         $script:RunStart = Get-Date
-        $script:Brand = 'molnpasvenska'; $script:BrandPath = $null
+        $script:BrandingDir = $null
         $script:Warnings.Clear()
         $script:Index = Write-ReportSite
     }
@@ -220,42 +215,21 @@ Describe 'Write-ReportSite (sidbygge)' {
         (Get-PageText 'rapport-styrning.html') | Should -Match 'Governance Visualizer har inte körts'
     }
     It 'kan byggas med ett annat tema' {
-        $script:Brand = 'neutral'
+        $script:BrandingDir = Join-Path $script:ScriptRoot 'branding-exempel\neutral'
         Write-ReportSite | Out-Null
         (Get-Content (Join-Path $script:RunDir 'rapport.html') -Raw) | Should -Match '--rk-accent:#0969da'
+        $script:BrandingDir = $null
     }
 }
 
-Describe 'Temasökning, mörk logga och bakgrund' {
+Describe 'Mörk logga och bakgrund' {
     BeforeEach { $script:Warnings.Clear() }
-    It 'hittar ett tema i den egna temamappen (%USERPROFILE%\.rapportkit\themes)' {
-        $old = $env:USERPROFILE
-        try {
-            $env:USERPROFILE = Join-Path $TestDrive 'profil'
-            $dir = Join-Path $env:USERPROFILE '.rapportkit\themes\minegen'
-            New-Item -ItemType Directory -Force $dir | Out-Null
-            '{ "name": "Mitt eget" }' | Set-Content (Join-Path $dir 'theme.json') -Encoding utf8
-            $t = Get-BrandTheme 'minegen' $null
-            $t.Data.name | Should -Be 'Mitt eget'
-            $t.Source | Should -Be $dir
-        }
-        finally { $env:USERPROFILE = $old }
-    }
-    It 'branding-local bredvid scriptet går före branding\' {
-        $local = Join-Path $script:ScriptRoot 'branding-local\tmp-test-tema'
-        try {
-            New-Item -ItemType Directory -Force $local | Out-Null
-            '{ "name": "Lokalt" }' | Set-Content (Join-Path $local 'theme.json') -Encoding utf8
-            (Get-BrandTheme 'tmp-test-tema' $null).Data.name | Should -Be 'Lokalt'
-        }
-        finally { Remove-Item $local -Recurse -Force -ErrorAction SilentlyContinue; Remove-Item (Join-Path $script:ScriptRoot 'branding-local') -Force -ErrorAction SilentlyContinue }
-    }
     It 'bäddar in en separat logga för mörkt läge' {
         $dir = Join-Path $TestDrive 'darklogo'; New-Item -ItemType Directory $dir | Out-Null
         '<svg xmlns="http://www.w3.org/2000/svg" width="10" height="10"/>' | Set-Content (Join-Path $dir 'l.svg')
         '<svg xmlns="http://www.w3.org/2000/svg" width="12" height="12"/>' | Set-Content (Join-Path $dir 'd.svg')
         '{ "name": "Mörk", "logo": { "type": "image", "file": "l.svg", "fileDark": "d.svg", "alt": "X" } }' | Set-Content (Join-Path $dir 'theme.json') -Encoding utf8
-        $html = Get-LogoHtml (Get-BrandTheme $null $dir)
+        $html = Get-LogoHtml (Get-BrandTheme $dir)
         $html | Should -Match 'rk-l-light'
         $html | Should -Match 'rk-l-dark'
         $script:Warnings.Count | Should -Be 0
@@ -264,10 +238,10 @@ Describe 'Temasökning, mörk logga och bakgrund' {
         $dir = Join-Path $TestDrive 'bg'; New-Item -ItemType Directory $dir | Out-Null
         [IO.File]::WriteAllBytes((Join-Path $dir 'b.png'), [byte[]](1..50))
         '{ "name": "Bg", "background": { "file": "b.png", "opacity": 0.2 } }' | Set-Content (Join-Path $dir 'theme.json') -Encoding utf8
-        (New-ThemeCss (Get-BrandTheme $null $dir)) | Should -Match 'body::before\{content:"";position:fixed.*data:image/png;base64,.*opacity:0\.2'
+        (New-ThemeCss (Get-BrandTheme $dir)) | Should -Match 'body::before\{content:"";position:fixed.*data:image/png;base64,.*opacity:0\.2'
         '{ "name": "Bg2", "background": { "file": "finns-inte.png" } }' | Set-Content (Join-Path $dir 'theme.json') -Encoding utf8
         $script:Warnings.Clear()
-        (New-ThemeCss (Get-BrandTheme $null $dir)) | Should -Not -Match 'body::before'
+        (New-ThemeCss (Get-BrandTheme $dir)) | Should -Not -Match 'body::before'
         ($script:Warnings -join ' ') | Should -Match 'bakgrundsbild'
     }
 }
@@ -285,12 +259,12 @@ Describe 'Anonymisering' {
         $script:HidePersonalData = $false; $script:LatestTools = $false
         $script:Status = [ordered]@{ azqr = @{ State = 'OK'; Note = '' } }
         $script:RunStart = Get-Date
-        $script:Brand = 'neutral'; $script:BrandPath = $null
+        $script:BrandingDir = Join-Path $script:ScriptRoot 'branding-exempel\neutral'
         $script:Anonymize = $true
         $script:Warnings.Clear()
         Write-ReportSite | Out-Null
     }
-    AfterAll { $script:Anonymize = $false }
+    AfterAll { $script:Anonymize = $false; $script:BrandingDir = $null }
 
     It 'bygger anonyma sidor i anonym\ och låter den vanliga rapporten vara orörd' {
         foreach ($f in 'rapport.html', 'rapport-resurser.html', 'rapport-komplett.html') { Test-Path (Join-Path $script:RunDir "anonym\$f") | Should -BeTrue }

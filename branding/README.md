@@ -1,43 +1,28 @@
 # Branding: utseendet på rapporten
 
-Rapporten byggs av en mall (tema) som du kan byta utan att ändra någon kod. Ett tema är en mapp:
+Rapportens utseende är **filerna i den här mappen**. Det finns ingen flagga och inget val: byter du filerna blir det ett
+nytt utseende.
 
 ```
 branding\
-  molnpasvenska\        <- ett tema (standard just nu)
-    theme.json          <- färger, typsnitt, logga, sidfot
-    logo.svg            <- valfritt: en logga som bildfil (om du inte använder ordbild)
-    custom.css          <- valfritt: egna CSS-regler som läggs sist
-  neutral\              <- ett neutralt reservtema
+  theme.json       <- färger, typsnitt, logga, sidfot (Moln på svenska följer med)
+  logo.svg         <- valfritt: en logga som bildfil (annars en ordbild av texten i theme.json)
+  logo-dark.svg    <- valfritt: logga för mörkt läge
+  bakgrund.jpg     <- valfritt: bakgrundsbild
+  custom.css       <- valfritt: egna CSS-regler som läggs sist
 ```
 
-## Välj tema
+## Så gör du en kundversion med en annan profil
 
-| Hur | Exempel |
-|---|---|
-| Ett tema efter namn | `.\Run-Rapportkit.ps1 -Brand molnpasvenska` |
-| En mapp var som helst | `.\Run-Rapportkit.ps1 -BrandPath D:\teman\mitt-tema` |
-| Ett standardtema för den här datorn | skriv temats namn på en rad i `%USERPROFILE%\.rapportkit\brand.txt` |
+1. Gör en mapp med din profil (kopiera `..\branding-exempel\neutral\theme.json` som utgångspunkt, ändra och lägg till logga).
+2. Kör `.\Pack-Kit.ps1 -Branding D:\profiler\kund\branding`. Det ger en zip av kitet där `branding\` är din mapp.
+3. Ge zippen till kunden. Rapporten får exakt den profil som ligger i zippen.
 
-Ett temanamn letas upp i tur och ordning i: `branding-local\` bredvid scriptet, `%USERPROFILE%\.rapportkit\themes\` och `branding\` (det som följer med kitet).
-`branding-local\` ingår aldrig i repot (se `.gitignore`).
+Vill du bara testa utseendet på en befintlig körning utan att köra verktygen igen: byt filerna i `branding\` och kör
+`.\Run-Rapportkit.ps1 -ReportOnly -Period <år-månad>`.
 
-Anges inget används `brand.txt` om den finns, annars `molnpasvenska`. Saknas temat eller är något ogiltigt faller rapporten tillbaka på inbyggda
-standardvärden och scriptet skriver en varning. Det blir aldrig en trasig rapport.
-
-## Teman som inte ska ligga i det publika repot
-
-Ett tema för ett eget företags eller en kunds varumärke bör inte checkas in i ett öppet repo. Lägg det i
-`%USERPROFILE%\.rapportkit\themes\<namn>` (gäller för alla versioner av kitet, så det behöver bara göras en gång per
-dator) och skriv `<namn>` i `%USERPROFILE%\.rapportkit\brand.txt` för att göra det till standard. Mappen kan kopieras
-mellan datorer. Ta bort `brand.txt` för att gå tillbaka till standardtemat.
-
-## Skapa ett nytt tema
-
-1. Kopiera `branding\neutral` till `branding\<ditt-namn>`.
-2. Ändra `theme.json` (se nedan).
-3. Kör `.\Run-Rapportkit.ps1 -Brand <ditt-namn> -ReportOnly` på en befintlig resultatmapp för att se resultatet
-   direkt utan att köra om verktygen.
+Saknas `theme.json` eller är något ogiltigt faller rapporten tillbaka på inbyggda standardvärden och scriptet skriver en
+varning. Det blir aldrig en trasig rapport.
 
 ## theme.json
 
@@ -51,8 +36,8 @@ mellan datorer. Ta bort `brand.txt` för att gå tillbaka till standardtemat.
 | `fonts.body`, `fonts.heading` | Typsnittslistor (CSS `font-family`). Typsnitt som inte finns på läsarens dator ersätts av nästa i listan |
 | `footer` | Text i sidfoten |
 | `contact` | `text` och `url` för en kontaktlänk i sidfoten (lämna tomt för att utelämna) |
-| `background` | `file` (bild i temamappen, högst 500 KB) och `opacity` (0 till 1, standard 0,08). Visas bakom innehållet, inte vid utskrift |
-| `customCss` | Filnamn på en CSS-fil i temamappen (valfritt) |
+| `background` | `file` (bild i mappen, högst 500 KB) och `opacity` (0 till 1, standard 0,08). Visas bakom innehållet, inte vid utskrift |
+| `customCss` | Filnamn på en CSS-fil i mappen (valfritt) |
 
 Färger i `colors.*`: `bg`, `surface`, `surfaceAlt`, `border`, `text`, `muted`, `accent` (profilfärg), `accentText`
 (profilfärg för text och länkar, måste vara läsbar mot `surface`) och `onAccent` (text ovanpå profilfärgen). Värden
@@ -66,7 +51,7 @@ Antingen en **ordbild** (text i färger), som Moln på svenska:
 "logo": { "type": "wordmark", "parts": [ { "text": "Molnpå", "color": "text" }, { "text": "svenska", "color": "accent" } ] }
 ```
 
-(`color` är `text`, `accent`, `accentText` eller `muted`.) Eller en **bildfil** i temamappen (svg, png, jpg, gif eller
+(`color` är `text`, `accent`, `accentText` eller `muted`.) Eller en **bildfil** i mappen (svg, png, jpg, gif eller
 webp, högst 300 KB). Den bäddas in i varje sida, så rapporten är fristående:
 
 ```json
@@ -77,9 +62,10 @@ webp, högst 300 KB). Den bäddas in i varje sida, så rapporten är fristående
 
 ## Tänk på
 
-- **Rättigheter:** använd bara ett varumärke (namn, logga, färger) som du har rätt att använda. Ett tema för någon
-  annans varumärke, till exempel en partners eller kunds, kräver deras tillstånd.
-- **Tema från okänd källa:** `theme.json` valideras (färger och typsnitt kontrolleras, och bara kända färgnamn tillåts i
-  loggan), men `custom.css` läggs in som den är. Granska den innan du använder ett tema du inte skrivit själv.
+- **Rättigheter:** använd bara ett varumärke (namn, logga, färger) som du har rätt att använda. En profil för någon
+  annans varumärke, till exempel en kunds eller en arbetsgivares, kräver deras tillstånd. Lägg den inte i det publika repot:
+  använd `Pack-Kit.ps1` med en mapp utanför repot.
+- **Profil från okänd källa:** `theme.json` valideras (färger och typsnitt kontrolleras, och bara kända färgnamn tillåts i
+  loggan), men `custom.css` läggs in som den är. Granska den innan du använder en profil du inte skrivit själv.
 - **Typsnitt:** rapporten bäddar inte in typsnittsfiler (de skulle göra varje sida flera hundra kB större). Moln på
   svenska använder Inter, och datorer utan Inter visar det nästa typsnittet i listan (Segoe UI).

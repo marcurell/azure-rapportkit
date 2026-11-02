@@ -68,10 +68,6 @@
 .PARAMETER MaxPortalSubscriptions
   Högst så många (aktiva) prenumerationer hämtas Defender- och kostnadsdata för (standard 25). Cost Management
   begränsar anrop hårt, så hundratals prenumerationer tar timmar.
-.PARAMETER Brand
-  Rapportens utseende: namnet på ett tema i branding\ (standard molnpasvenska). Se branding\README.md.
-.PARAMETER BrandPath
-  Sökväg till en tema-mapp (med theme.json) var som helst. Går före -Brand.
 .PARAMETER HidePersonalData
   Dölj användardata (namn och e-postadresser i rolltilldelningar) i Governance Visualizers rapport. Gäller inte
   Maesters rapport, som kan innehålla användarnamn.
@@ -116,8 +112,6 @@ param(
     [switch]$ReportOnly,
     [switch]$SkipPortal,
     [int]$MaxPortalSubscriptions = 25,
-    [string]$Brand = 'molnpasvenska',
-    [string]$BrandPath,
     [switch]$HidePersonalData,
     [switch]$KeepLogin,
     [switch]$NoZip,
@@ -146,17 +140,6 @@ $BoundParams = @{}
 foreach ($k in $PSBoundParameters.Keys) { $BoundParams[$k] = $PSBoundParameters[$k] }
 # Lösenordet ska aldrig skickas vidare på kommandoraden eller skrivas i "kör om"-kommandot.
 [void]$BoundParams.Remove('ZipPassword')
-# Eget standardtema utan flagga: en rad med temats namn i %USERPROFILE%\.rapportkit\brand.txt (se branding\README.md).
-if (-not $PSBoundParameters.ContainsKey('Brand') -and -not $BrandPath) {
-    try {
-        $brandFile = Join-Path $env:USERPROFILE '.rapportkit\brand.txt'
-        if (Test-Path -LiteralPath $brandFile) {
-            $brandName = ([string](Get-Content -LiteralPath $brandFile -TotalCount 1)).Trim()
-            if ($brandName -match '^[A-Za-z0-9_-]+$') { $Brand = $brandName }
-        }
-    }
-    catch { }
-}
 
 $ScriptRoot = Split-Path -Parent $PSCommandPath
 $ToolsDir = Join-Path $ScriptRoot 'tools'        # används bara för offline-bundle
@@ -164,7 +147,7 @@ $TotalSteps = 10
 # Governance Visualizer hämtas som en fast version (den som testats). Ändras med flit, inte av misstag.
 $GvVersion = '6.7.2'
 $GvUrl = "https://github.com/Azure/Azure-Governance-Visualizer/archive/refs/tags/$GvVersion.zip"
-$KitVersion = '1.1.1'
+$KitVersion = '1.2.0'
 
 # Testade (pinnade) verktygsversioner, och kontrollsummor (SHA256) för de zip-filer som hämtas direkt. Då får kunden
 # samma verktyg som vi har testat, och en ändrad fil upptäcks. Verktygen installerade via winget kontrolleras av winget
@@ -681,7 +664,7 @@ function Write-RunSummary([int]$Code) {
         exitCode        = $Code
         tenantId        = $TenantId
         period          = $Period
-        options         = [ordered]@{ brand = $(if ($BrandPath) { $BrandPath } else { $Brand }); hidePersonalData = [bool]$HidePersonalData; latestTools = [bool]$LatestTools; offline = [bool]$Offline; skipGovViz = [bool]$SkipGovViz; skipAzqr = [bool]$SkipAzqr; skipMaester = [bool]$SkipMaester; skipPortal = [bool]$SkipPortal; managementGroupId = $ManagementGroupId; maxPortalSubscriptions = $MaxPortalSubscriptions }
+        options         = [ordered]@{ hidePersonalData = [bool]$HidePersonalData; latestTools = [bool]$LatestTools; offline = [bool]$Offline; skipGovViz = [bool]$SkipGovViz; skipAzqr = [bool]$SkipAzqr; skipMaester = [bool]$SkipMaester; skipPortal = [bool]$SkipPortal; managementGroupId = $ManagementGroupId; maxPortalSubscriptions = $MaxPortalSubscriptions }
         environment     = [ordered]@{ os = [Environment]::OSVersion.VersionString; powershell = $PSVersionTable.PSVersion.ToString(); computer = $env:COMPUTERNAME }
         tools           = [ordered]@{ governanceVisualizer = $GvVersion; azqrPinned = $Pins.Azqr; azAccounts = (Get-ModuleVersionText 'Az.Accounts'); maester = (Get-ModuleVersionText 'Maester'); pester = (Get-ModuleVersionText 'Pester') }
         results         = @($Status.Keys | ForEach-Object { [ordered]@{ name = $_; state = $Status[$_].State; note = $Status[$_].Note } })
@@ -1550,7 +1533,7 @@ try {
     # STEG 10: HTML-rapport. Varje avsnitt byggs för sig; går ett avsnitt inte att bygga
     # blir det en varning i rapporten, inte ett avbrott.
     # =======================================================================
-    Write-Step 10 'Bygger rapporten' 'Läser verktygens resultat och skriver en rapport i flera sidor med gemensam stil. Utseendet byts med -Brand eller -BrandPath (se branding\README.md).'
+    Write-Step 10 'Bygger rapporten' 'Läser verktygens resultat och skriver en rapport i flera sidor med gemensam stil. Utseendet styrs av filerna i mappen branding\ (se branding\README.md).'
     # Rapportgeneratorn ligger i lib\Report.ps1: den läser resultaten och bygger sidorna med det valda temat.
     $reportLib = Join-Path $ScriptRoot 'lib\Report.ps1'
     if (-not (Test-Path -LiteralPath $reportLib)) { Fail 'lib\Report.ps1 saknas bredvid scriptet, så rapporten kan inte byggas.' 'Använd hela kitet (zip från en release), inte bara Run-Rapportkit.ps1.' }

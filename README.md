@@ -21,10 +21,10 @@ Scriptet **skriver inget i Azure-resurser eller i Entra-konfigurationen**. Det g
 $dest = Join-Path $env:USERPROFILE 'rapportkit-kit'
 $zip  = Join-Path $env:TEMP 'azure-rapportkit.zip'
 New-Item -ItemType Directory -Force $dest | Out-Null
-Invoke-WebRequest 'https://github.com/marcurell/azure-rapportkit/archive/refs/tags/v1.1.1.zip' -OutFile $zip
+Invoke-WebRequest 'https://github.com/marcurell/azure-rapportkit/archive/refs/tags/v1.2.0.zip' -OutFile $zip
 Expand-Archive $zip $dest -Force
 Get-ChildItem $dest -Recurse | Unblock-File
-$script = Join-Path $dest 'azure-rapportkit-1.1.1\Run-Rapportkit.ps1'
+$script = Join-Path $dest 'azure-rapportkit-1.2.0\Run-Rapportkit.ps1'
 $arg = '-NoExit -ExecutionPolicy Bypass -File "' + $script + '"'
 Start-Process powershell -ArgumentList $arg
 ```
@@ -83,15 +83,16 @@ Scriptet kontrollerar `.sha256`-filen om den ligger bredvid, frågar efter löse
 
 ## Utseende (branding)
 
-Rapporten är en flersidig webbplats i en gemensam stil, med navigering, ljust och mörkt läge (följer läsarens inställning) och utskriftsläge. Knappen "Spara hela rapporten som PDF" öppnar en sammanställning av alla sidor (`rapport-komplett.html`) och visar utskriftsdialogen. Utseendet styrs av ett **tema**: en mapp med `theme.json` (färger, typsnitt, logga, sidfot) och eventuellt en logofil och egen CSS. Standardtemat är `molnpasvenska`; det finns också `neutral`. **Egna teman** (till exempel för en arbetsgivare eller kund) ligger utanför repot, i `%USERPROFILE%\.rapportkit\themes\<namn>`, och kan göras till standard med en rad i `%USERPROFILE%\.rapportkit\brand.txt`. Se [branding/README.md](branding/README.md).
+Rapporten är en flersidig webbplats i en gemensam stil, med navigering, ljust och mörkt läge (följer läsarens inställning) och utskriftsläge. Knappen "Spara hela rapporten som PDF" öppnar en sammanställning av alla sidor (`rapport-komplett.html`) och visar utskriftsdialogen.
+
+Utseendet är **filerna i mappen `branding\`** (`theme.json`, logga, bakgrund, `custom.css`). Det finns ingen flagga: byt filerna så blir det ett nytt utseende. Standard är Moln på svenska. För en kundversion med en annan profil gör du en zip med `Pack-Kit.ps1`:
 
 ```powershell
-.\Run-Rapportkit.ps1 -Brand neutral                  # ett annat tema (branding\, branding-local\ eller ~\.rapportkit\themes\)
-.\Run-Rapportkit.ps1 -BrandPath D:\teman\kundnamn    # ett tema var som helst
-.\Run-Rapportkit.ps1 -ReportOnly -Brand neutral      # bygg om rapporten från befintliga resultat, utan att köra verktygen
+.\Pack-Kit.ps1 -Branding D:\profiler\kund\branding     # zip av kitet med din branding\ i stället
+.\Run-Rapportkit.ps1 -ReportOnly -Period 2026-10         # bygg om rapporten från befintliga resultat, utan att köra verktygen
 ```
 
-Se [branding/README.md](branding/README.md) för hur du skapar ett eget tema. Saknas eller är något ogiltigt i ett tema används inbyggda standardvärden och scriptet varnar.
+Se [branding/README.md](branding/README.md) för filerna och fälten i `theme.json`. Saknas eller är något ogiltigt används inbyggda standardvärden och scriptet varnar. Ett exempel på en annan profil finns i `branding-exempel\neutral`.
 
 **Verktygens egna rapporter** (Governance Visualizer, Maester, azqr:s Excel) går inte att göra om till samma stil, så de länkas som fördjupning och öppnas i nytt fönster. Observera att Governance Visualizers egen rapport hämtar sin stil, sina skript och sina ikoner från internet (bland annat `www.azadvertizer.net` och `cdnjs.cloudflare.com`), och därför inte visas rätt offline. Sidorna i det här kitet gör inga externa anrop.
 
@@ -164,8 +165,6 @@ Har kontot bara åtkomst till en subscription faller Governance Visualizer på b
 | `-Plain` | Rita ramar med ASCII-tecken (för konsoler som visar specialtecken fel) |
 | `-LatestTools` | Använd senaste verktygsversioner istället för de testade, och hoppa över kontrollsummor |
 | `-AllowUnverified` | Fortsätt trots att en kontrollsumma inte stämmer. Använd bara efter egen kontroll |
-| `-Brand <namn>` | Rapportens utseende: ett tema i `branding\` (standard `molnpasvenska`) |
-| `-BrandPath <mapp>` | Ett tema i en valfri mapp (går före `-Brand`) |
 
 ## Offline-bundle
 
