@@ -21,10 +21,10 @@ Scriptet **skriver inget i Azure-resurser eller i Entra-konfigurationen**. Det g
 $dest = Join-Path $env:USERPROFILE 'rapportkit-kit'
 $zip  = Join-Path $env:TEMP 'azure-rapportkit.zip'
 New-Item -ItemType Directory -Force $dest | Out-Null
-Invoke-WebRequest 'https://github.com/marcurell/azure-rapportkit/archive/refs/tags/v1.3.0.zip' -OutFile $zip
+Invoke-WebRequest 'https://github.com/marcurell/azure-rapportkit/archive/refs/tags/v1.3.1.zip' -OutFile $zip
 Expand-Archive $zip $dest -Force
 Get-ChildItem $dest -Recurse | Unblock-File
-$script = Join-Path $dest 'azure-rapportkit-1.3.0\Run-Rapportkit.ps1'
+$script = Join-Path $dest 'azure-rapportkit-1.3.1\Run-Rapportkit.ps1'
 $arg = '-NoExit -ExecutionPolicy Bypass -File "' + $script + '"'
 Start-Process powershell -ArgumentList $arg
 ```
@@ -32,6 +32,16 @@ Start-Process powershell -ArgumentList $arg
 Varför ett nytt fönster: PowerShell ISE klarar inte inloggningsfönster och frågor från PowerShell 7, så scriptet ska inte köras direkt i ISE.
 
 Du behöver ha tenant-ID:t till hands (Entra ID > Overview > Tenant ID). Scriptet frågar efter det, och därefter öppnas två inloggningsfönster i webbläsaren.
+
+## Kundversion (zip som mejlas)
+
+Till kunder skickas inte länken till det här repot utan en färdig zip med kundens egen README och guide (`docs\kund\`) och önskad branding:
+
+```powershell
+.\Pack-Kit.ps1 -Branding D:\profiler\kund\branding    # utan -Branding används kitets egen branding\
+```
+
+Zippen innehåller inget som pekar på repot. Kunden packar upp, avblockerar och kör `Run-Rapportkit.ps1`, och skickar tillbaka det krypterade resultatpaketet (`.rkenc`) och lösenordet var för sig. Du packar upp det med `Unprotect-Rapportkit.ps1`. Offline-paketet (`Build-Bundle.ps1`) innehåller samma kunddokument.
 
 ## Ladda ner manuellt
 

@@ -222,3 +222,34 @@ Describe 'Branding: en mapp, ingen flagga' {
         { & (Join-Path $PSScriptRoot '..\Pack-Kit.ps1') -Branding $b -Out (Join-Path $TestDrive 'x.zip') } | Should -Throw '*theme.json*'
     }
 }
+
+Describe 'Kundversion av kitet' {
+    BeforeAll {
+        $b = Join-Path $TestDrive 'kundprofil\branding'; New-Item -ItemType Directory -Force $b | Out-Null
+        '{ "name": "Kundprofil" }' | Set-Content (Join-Path $b 'theme.json') -Encoding utf8
+        $zip = Join-Path $TestDrive 'kund.zip'
+        & (Join-Path $PSScriptRoot '..\Pack-Kit.ps1') -Branding $b -Out $zip | Out-Null
+        $script:KundDir = Join-Path $TestDrive 'kundkit'; Expand-Archive $zip $script:KundDir
+        $script:Kit = (Get-ChildItem $script:KundDir -Directory | Select-Object -First 1).FullName
+    }
+    It 'innehåller kundens README och guide, inte repots' {
+        (Get-Content (Join-Path $script:Kit 'README.md') -Raw) | Should -Match 'Packa upp|Extrahera alla'
+        (Get-Content (Join-Path $script:Kit 'README.md') -Raw) | Should -Not -Match 'Snabbstart|Pack-Kit'
+        Test-Path (Join-Path $script:Kit 'docs\Kundguide-Azure-Rapportkit.docx') | Should -BeTrue
+        Test-Path (Join-Path $script:Kit 'docs\Anvandarguide-Azure-Rapportkit.docx') | Should -BeFalse
+        Test-Path (Join-Path $script:Kit 'docs\KUNDINFO.md') | Should -BeTrue
+    }
+    It 'har inga länkar till repot och inga utvecklarverktyg i zippen' {
+        foreach ($f in Get-ChildItem $script:Kit -Recurse -File -Include *.md, *.ps1, *.json, *.txt) {
+            (Get-Content $f.FullName -Raw) | Should -Not -Match 'marcurell/azure-rapportkit' -Because $f.Name
+        }
+        foreach ($n in 'Pack-Kit.ps1', 'Unprotect-Rapportkit.ps1', 'Build-Bundle.ps1') { Test-Path (Join-Path $script:Kit $n) | Should -BeFalse -Because $n }
+        Test-Path (Join-Path $script:Kit 'tests') | Should -BeFalse
+    }
+    It 'kunddokumenten i repot nämner inte repot eller Moln på svenska' {
+        foreach ($f in 'docs\kund\README.md', 'docs\KUNDINFO.md') {
+            $t = Get-Content (Join-Path $PSScriptRoot "..\$f") -Raw
+            $t | Should -Not -Match 'marcurell|github\.com/marcurell|Moln på svenska|molnpasvenska' -Because $f
+        }
+    }
+}

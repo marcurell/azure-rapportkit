@@ -116,10 +116,12 @@ if (Test-Path $Out) { Remove-Item $Out -Force }
 $stage = Join-Path $env:TEMP 'rapportkit-stage'
 if (Test-Path $stage) { Remove-Item $stage -Recurse -Force }
 New-Item -ItemType Directory $stage | Out-Null
-foreach ($file in 'Run-Rapportkit.ps1', 'Unprotect-Rapportkit.ps1', 'Pack-Kit.ps1', 'README.md', 'LICENSE', 'THIRD-PARTY-NOTICES.md') { Copy-Item (Join-Path $PSScriptRoot $file) $stage }
+foreach ($file in 'Run-Rapportkit.ps1', 'LICENSE', 'THIRD-PARTY-NOTICES.md') { Copy-Item (Join-Path $PSScriptRoot $file) $stage }
+# Kundversion: kundens README och guide (inget som pekar på repot).
+Copy-Item (Join-Path $PSScriptRoot 'docs\kund\README.md') "$stage\README.md"
 New-Item -ItemType Directory "$stage\docs" | Out-Null
 Copy-Item (Join-Path $PSScriptRoot 'docs\KUNDINFO.md') "$stage\docs"
-Copy-Item (Join-Path $PSScriptRoot 'docs\Anvandarguide-Azure-Rapportkit.docx') "$stage\docs"
+Get-ChildItem (Join-Path $PSScriptRoot 'docs\kund') -Filter '*.docx' | Copy-Item -Destination "$stage\docs"
 foreach ($dir in 'lib', 'branding', 'branding-exempel') { Copy-Item (Join-Path $PSScriptRoot $dir) "$stage\$dir" -Recurse }
 Copy-Item $tools "$stage\tools" -Recurse
 Compress-Archive "$stage\*" $Out

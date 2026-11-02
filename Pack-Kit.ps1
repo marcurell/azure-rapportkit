@@ -6,8 +6,10 @@
   att välja tema: det som ligger i branding\ i zippen är det som används. Pack-Kit.ps1 gör en zip av kitet där branding\
   ersatts av innehållet i en annan mapp, så att kundens rapport får din profil utan att du ändrar något i repot.
 
-  Kör från en uppackad version av kitet (eller en klon av repot). Zippen innehåller scriptet, lib\, docs\, README och
-  licensfilerna, men aldrig tests\, .git\ eller några resultat.
+  Kör från en uppackad version av kitet (eller en klon av repot). Zippen är en KUNDVERSION: den innehåller scriptet,
+  lib\, branding\, kundens README (docs\kund\README.md, som README.md), kundguiden (Word), docs\KUNDINFO.md och
+  licensfilerna, men inget som pekar på repot (repots README, Unprotect-Rapportkit.ps1, Pack-Kit.ps1) och aldrig tests\,
+  .git\ eller några resultat. Kunden får alltså ett paket som går att packa upp och köra utan att något hämtas från ditt repo.
 .PARAMETER Branding
   Mapp vars innehåll blir branding\ i zippen. Måste innehålla theme.json. Utan den används kitets egen branding\.
 .PARAMETER Out
@@ -45,10 +47,17 @@ $stageRoot = Join-Path ([System.IO.Path]::GetTempPath()) ('rk-pack-' + [guid]::N
 $stage = Join-Path $stageRoot "azure-rapportkit-$version"
 try {
     New-Item -ItemType Directory -Force $stage | Out-Null
-    foreach ($f in 'Run-Rapportkit.ps1', 'Unprotect-Rapportkit.ps1', 'README.md', 'LICENSE', 'THIRD-PARTY-NOTICES.md') {
+    foreach ($f in 'Run-Rapportkit.ps1', 'LICENSE', 'THIRD-PARTY-NOTICES.md') {
         if (Test-Path -LiteralPath (Join-Path $root $f)) { Copy-Item -LiteralPath (Join-Path $root $f) $stage }
     }
-    foreach ($d in 'lib', 'docs') { if (Test-Path -LiteralPath (Join-Path $root $d)) { Copy-Item -LiteralPath (Join-Path $root $d) (Join-Path $stage $d) -Recurse } }
+    Copy-Item -LiteralPath (Join-Path $root 'lib') (Join-Path $stage 'lib') -Recurse
+    # Kundens dokument: README.md i zippen är kundversionen (scriptets felmeddelanden hänvisar till README), inte repots.
+    $kund = Join-Path $root 'docs\kund'
+    if (-not (Test-Path -LiteralPath (Join-Path $kund 'README.md'))) { throw "Hittar inte kundens README ($kund\README.md)." }
+    Copy-Item -LiteralPath (Join-Path $kund 'README.md') (Join-Path $stage 'README.md')
+    New-Item -ItemType Directory -Force (Join-Path $stage 'docs') | Out-Null
+    Copy-Item -LiteralPath (Join-Path $root 'docs\KUNDINFO.md') (Join-Path $stage 'docs')
+    Get-ChildItem -LiteralPath $kund -Filter '*.docx' | Copy-Item -Destination (Join-Path $stage 'docs')
     Copy-Item -LiteralPath $brandSource -Destination (Join-Path $stage 'branding') -Recurse
     if (Test-Path -LiteralPath $Out) { Remove-Item -LiteralPath $Out -Force }
     [System.IO.Compression.ZipFile]::CreateFromDirectory($stageRoot, $Out)

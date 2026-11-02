@@ -7,7 +7,7 @@ Det här dokumentet beskriver vad scriptet gör, vad det rör och vad ni behöve
 - Scriptet körs **på en dator hos er**, med **ert konto** och **era behörigheter**. Det kopplar inte upp sig mot något system hos oss.
 - Det **skriver inget i Azure-resurser** eller i Entra-konfigurationen. Det använder läsande anrop.
 - Resultatet (rapporter och loggar) sparas **lokalt** i en mapp ni väljer. Det är ni som bestämmer om och hur det lämnas vidare.
-- All kod är öppen och går att granska: https://github.com/marcurell/azure-rapportkit
+- All kod ingår i kitet och går att granska: `Run-Rapportkit.ps1` är kommenterad rad för rad och resten ligger i mappen `lib\`.
 
 ## Vad scriptet gör
 
@@ -76,10 +76,10 @@ Rapportens utseende (färger, logga, sidfot) styrs av filerna i mappen `branding
 
 ## Så granskar ni scriptet innan körning
 
-1. Läs koden på GitHub (`Run-Rapportkit.ps1`). Den är kommenterad rad för rad.
-2. Kontrollera att versionen ni kör är en släppt version (https://github.com/marcurell/azure-rapportkit/releases).
+1. Läs koden i kitet (`Run-Rapportkit.ps1` och mappen `lib\`). Den är kommenterad rad för rad.
+2. Kontrollera att kitet kommer från den ni fått det av: uppge versionsnumret (visas överst när scriptet startar) och jämför gärna kontrollsumman om ni fått en.
 3. Kör gärna först med `-SkipMaester` och i en testmiljö.
-4. Behöver datorn vara helt utan internet under körningen: be om offline-paketet (`Build-Bundle.ps1`), som innehåller alla verktyg.
+4. Behöver datorn vara helt utan internet under körningen: be om offline-paketet, som innehåller alla verktyg.
 
 ## Fastlåsta verktyg och licenser
 

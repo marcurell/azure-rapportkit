@@ -147,7 +147,7 @@ $TotalSteps = 10
 # Governance Visualizer hämtas som en fast version (den som testats). Ändras med flit, inte av misstag.
 $GvVersion = '6.7.2'
 $GvUrl = "https://github.com/Azure/Azure-Governance-Visualizer/archive/refs/tags/$GvVersion.zip"
-$KitVersion = '1.3.0'
+$KitVersion = '1.3.1'
 
 # Testade (pinnade) verktygsversioner, och kontrollsummor (SHA256) för de zip-filer som hämtas direkt. Då får kunden
 # samma verktyg som vi har testat, och en ändrad fil upptäcks. Verktygen installerade via winget kontrolleras av winget
@@ -1556,7 +1556,7 @@ try {
     Write-Step 10 'Bygger rapporten' 'Läser verktygens resultat och skriver en rapport i flera sidor med gemensam stil. Utseendet styrs av filerna i mappen branding\ (se branding\README.md).'
     # Rapportgeneratorn ligger i lib\Report.ps1: den läser resultaten och bygger sidorna med det valda temat.
     $reportLib = Join-Path $ScriptRoot 'lib\Report.ps1'
-    if (-not (Test-Path -LiteralPath $reportLib)) { Fail 'lib\Report.ps1 saknas bredvid scriptet, så rapporten kan inte byggas.' 'Använd hela kitet (zip från en release), inte bara Run-Rapportkit.ps1.' }
+    if (-not (Test-Path -LiteralPath $reportLib)) { Fail 'lib\Report.ps1 saknas bredvid scriptet, så rapporten kan inte byggas.' 'Använd hela kitet (hela zip-filen, uppackad), inte bara Run-Rapportkit.ps1.' }
     . $reportLib
     $reportPath = Write-ReportSite
     Write-Ok "Rapport: $reportPath"
