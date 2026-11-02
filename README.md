@@ -21,10 +21,10 @@ Scriptet **skriver inget i Azure-resurser eller i Entra-konfigurationen**. Det g
 $dest = Join-Path $env:USERPROFILE 'rapportkit-kit'
 $zip  = Join-Path $env:TEMP 'azure-rapportkit.zip'
 New-Item -ItemType Directory -Force $dest | Out-Null
-Invoke-WebRequest 'https://github.com/marcurell/azure-rapportkit/archive/refs/tags/v1.2.0.zip' -OutFile $zip
+Invoke-WebRequest 'https://github.com/marcurell/azure-rapportkit/archive/refs/tags/v1.3.0.zip' -OutFile $zip
 Expand-Archive $zip $dest -Force
 Get-ChildItem $dest -Recurse | Unblock-File
-$script = Join-Path $dest 'azure-rapportkit-1.2.0\Run-Rapportkit.ps1'
+$script = Join-Path $dest 'azure-rapportkit-1.3.0\Run-Rapportkit.ps1'
 $arg = '-NoExit -ExecutionPolicy Bypass -File "' + $script + '"'
 Start-Process powershell -ArgumentList $arg
 ```
@@ -62,9 +62,10 @@ Allt hamnar i `<resultatmapp>\<år-månad>\`:
 
 | Fil | Innehåll |
 |---|---|
-| `rapport.html` (+ fem sidor) | Rapporten i en gemensam stil: **Översikt**, **Styrning**, **Resurser**, **Entra ID**, **Defender & kostnad** och **Om körningen**. Varje sida är fristående (stil och logga ligger inbäddade) och hämtar inget från internet |
+| `rapport.html` (+ sex sidor) | Rapporten i en gemensam stil: **Översikt**, **Struktur** (managementgrupper, prenumerationer, virtuella nät och peerings), **Styrning**, **Resurser**, **Entra ID**, **Defender & kostnad** och **Om körningen**. Varje sida är fristående (stil och logga ligger inbäddade) och hämtar inget från internet |
 | `azgovviz\`, `azqr\`, `maester\` | Verktygens egna rapporter |
 | `portal\` | Defender- och kostnadsdata som CSV (inklusive Secure Score per kontroll) |
+| `struktur\` | Managementgrupper, virtuella nät, peerings och nätverksnoder som CSV |
 | `rapportkit.log` | Rensad logg med tidsstämpel och nivå |
 | `rapportkit-console.log` | Hela konsolutskriften inklusive verktygens text (felsökning; tas inte med i zippen) |
 | `run-summary.json` | Maskinläsbar sammanfattning: versioner, tid per steg, status, varningar, slutkod |
@@ -138,7 +139,7 @@ Har kontot bara åtkomst till en subscription faller Governance Visualizer på b
 6. **Governance Visualizer**
 7. **azqr**
 8. **Maester**
-9. **Defender och kostnad**: hämtar automatiskt Defender-planer, Secure Score (även per kontroll), Defender-rekommendationer och kostnad per månad för de senaste 12 månaderna, via Azure Resource Manager (read-only). Sparas som CSV i `portal\`. Det som tidigare var manuella exporter från portalen.
+9. **Defender, kostnad och struktur**: hämtar även managementgruppsträdet och nätverket (virtuella nät, peerings, brandväggar och gateways) via Azure Resource Graph, read-only, till rapportsidan Struktur. Defender och kostnad: hämtar automatiskt Defender-planer, Secure Score (även per kontroll), Defender-rekommendationer och kostnad per månad för de senaste 12 månaderna, via Azure Resource Manager (read-only). Sparas som CSV i `portal\`. Det som tidigare var manuella exporter från portalen.
 10. **HTML-rapport**
 
 ## Flaggor
@@ -147,7 +148,7 @@ Har kontot bara åtkomst till en subscription faller Governance Visualizer på b
 |---|---|
 | `-TenantId <guid>` | Hoppar över tenant-frågan |
 | `-ManagementGroupId <id>` | Kör Governance Visualizer mot annan management group än tenant root |
-| `-SkipGovViz` / `-SkipAzqr` / `-SkipMaester` / `-SkipPortal` | Hoppa över ett verktyg (`-SkipPortal` = Defender och kostnad) |
+| `-SkipGovViz` / `-SkipAzqr` / `-SkipMaester` / `-SkipPortal` | Hoppa över ett verktyg (`-SkipPortal` = Defender, kostnad och struktur) |
 | `-DeviceLogin` | Inloggning med kod istället för webbläsarfönster |
 | `-NoInstall` | Hämta och installera ingenting |
 | `-Offline` | Ladda inte ner något, använd bara `tools\` (se nedan) |

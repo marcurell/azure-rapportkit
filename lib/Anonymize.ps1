@@ -25,6 +25,7 @@ function Initialize-Anonymizer {
         Counters = @{}
         Guids    = @{}
         Emails   = @{}
+        Ips      = @{}
     }
 }
 
@@ -94,6 +95,18 @@ function Register-AnonData($d) {
     foreach ($rows in @($d.Plans, $d.Scores, $d.Ctrls, $d.Recs, $d.Costs)) { & $col $rows @('Prenumeration') 'sub' 'Prenumeration' }
     foreach ($r in @($d.Recs)) { if ($r -and $r.Resurs) { [void](Add-AnonValue 'res' 'Resurs' (([string]$r.Resurs -split '/')[-1])) } }
 
+    # Struktur: managementgrupper, prenumerationer, nätverk och noder
+    foreach ($r in @($d.MgRows)) {
+        if ($null -eq $r) { continue }
+        if ($r.Typ -eq 'Prenumeration') { [void](Add-AnonValue 'sub' 'Prenumeration' $r.Namn) }
+        else { $a = Add-AnonValue 'mg' 'Management group' $r.Namn; [void](Add-AnonValue 'mg' 'Management group' $r.Id $a) }
+    }
+    & $col $d.Vnets @('Namn') 'vnet' 'VNet'
+    & $col $d.Vnets @('Resursgrupp') 'rg' 'Resursgrupp'
+    & $col $d.Peerings @('Fran', 'Till') 'vnet' 'VNet'
+    & $col $d.NetNodes @('Namn') 'node' 'Nätverksnod'
+    & $col $d.NetNodes @('Resursgrupp') 'rg' 'Resursgrupp'
+
     # Miljön: dator, konto och sökvägar syns på sidan Om körningen.
     [void](Add-AnonValue 'host' 'Dator' $env:COMPUTERNAME)
     [void](Add-AnonValue 'acct' 'Konto' $env:USERNAME)
@@ -135,6 +148,13 @@ function Invoke-AnonText([string]$Text) {
             $script:Anon.Emails[$k]
         })
     $Text = [regex]::Replace($Text, '(?i)\b[A-Za-z0-9\-]+\.onmicrosoft\.com\b', 'exempel.onmicrosoft.com')
+    # IPv4-adresser och adressrymder (10.0.0.0/16): varje adress får en egen utbytesadress, prefixlängden behålls.
+    $Text = [regex]::Replace($Text, '(?<![0-9.])(\d{1,3}(?:\.\d{1,3}){3})(/\d{1,2})?(?![0-9.])', [System.Text.RegularExpressions.MatchEvaluator] {
+            param($m)
+            $ip = $m.Groups[1].Value
+            if (-not $script:Anon.Ips.ContainsKey($ip)) { $n = $script:Anon.Ips.Count + 1; $script:Anon.Ips[$ip] = '10.{0}.{1}.0' -f (99 + [math]::Floor($n / 250)), ($n % 250) }
+            $script:Anon.Ips[$ip] + $m.Groups[2].Value
+        })
     $Text = [regex]::Replace($Text, '(?<![0-9A-Za-z])[0-9a-fA-F]{8}-(?:[0-9a-fA-F]{4}-){3}[0-9a-fA-F]{12}(?![0-9A-Za-z])', [System.Text.RegularExpressions.MatchEvaluator] {
             param($m)
             $k = $m.Value.ToLower()

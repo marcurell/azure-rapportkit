@@ -23,8 +23,8 @@
     Steg 6  Governance Visualizer   Management groups, policies, rolltilldelningar
     Steg 7  azqr                    Rekommendationer per resurs + Advisor + Defender
     Steg 8  Maester                 Tester av Entra ID (valfritt)
-    Steg 9  Defender och kostnad    Defender-planer, Secure Score, Defender-rekommendationer och kostnad
-                                    (12 mån) hämtas automatiskt och sparas som CSV i portal\
+    Steg 9  Defender, kostnad       Defender-planer, Secure Score, rekommendationer och kostnad (12 mån), samt
+            och struktur            managementgrupper och nätverk (VNet, peerings): sparas som CSV i portal\ och struktur\
     Steg 10 HTML-rapport     Sammanfattning i <resultatmapp>\rapport.html. Resultatfilerna kontrolleras
                              innan de läses; avvikelser visas som varningar i rapporten.
 
@@ -147,7 +147,7 @@ $TotalSteps = 10
 # Governance Visualizer hämtas som en fast version (den som testats). Ändras med flit, inte av misstag.
 $GvVersion = '6.7.2'
 $GvUrl = "https://github.com/Azure/Azure-Governance-Visualizer/archive/refs/tags/$GvVersion.zip"
-$KitVersion = '1.2.0'
+$KitVersion = '1.3.0'
 
 # Testade (pinnade) verktygsversioner, och kontrollsummor (SHA256) för de zip-filer som hämtas direkt. Då får kunden
 # samma verktyg som vi har testat, och en ändrad fil upptäcks. Verktygen installerade via winget kontrolleras av winget
@@ -330,7 +330,7 @@ function Get-StateBadge([string]$State) {
 
 # --- Sammanfattningsruta i slutet: en rad per verktyg med tid, noteringar och sökvägar.
 function Write-SummaryBox($StatusTable, $Facts) {
-    $toolStep = @{ 'Governance Visualizer' = 6; 'azqr' = 7; 'Maester' = 8; 'Defender och kostnad' = 9 }
+    $toolStep = @{ 'Governance Visualizer' = 6; 'azqr' = 7; 'Maester' = 8; 'Defender och kostnad' = 9; 'Struktur' = 9 }
     Write-Host ''
     Write-Host ($G.DTL + ($G.DH * ($UiWidth - 2)) + $G.DTR) -ForegroundColor Cyan
     Write-BoxLine @(, @('   SAMMANFATTNING', 'White')) 'Cyan' -Double
@@ -455,7 +455,11 @@ function Test-ActionAllowed($Perms, [string]$Action) {
 # Anropar Azure Resource Manager via az rest (inget az-tillägg behövs). Försöker 3 gånger vid
 # hastighetsbegränsning (429). Kastar fel med Azures meddelande om anropet misslyckas.
 function Invoke-ArmRest([string]$Method, [string]$Url, $Body) {
-    $azArgs = @('rest', '--method', $Method, '--url', $Url, '-o', 'json')
+    # Frågesträngen skickas som --url-parameters: ett & i --url delas annars av cmd.exe (az är en .cmd-fil) och allt efter det försvinner.
+    # Värdena avkodas först, eftersom az kodar dem på nytt.
+    $base, $qs = $Url -split '\?', 2
+    $azArgs = @('rest', '--method', $Method, '--url', $base, '-o', 'json')
+    if ($qs) { $azArgs += '--url-parameters'; $azArgs += @($qs -split '&' | Where-Object { $_ } | ForEach-Object { $kv = $_ -split '=', 2; if ($kv.Count -eq 2) { '{0}={1}' -f $kv[0], [uri]::UnescapeDataString($kv[1]) } else { $_ } }) }
     $tmp = $null
     if ($Body) {
         $tmp = Join-Path $env:TEMP ('azrest-' + [guid]::NewGuid().ToString('N') + '.json')
@@ -894,7 +898,7 @@ try {
     $GvDir = Join-Path $OutputRoot "Azure-Governance-Visualizer-$GvVersion"
     $Dirs = @{}
     try {
-        foreach ($n in 'azgovviz', 'azqr', 'maester', 'portal') {
+        foreach ($n in 'azgovviz', 'azqr', 'maester', 'portal', 'struktur') {
             $Dirs[$n] = Join-Path $RunDir $n
             New-Item -ItemType Directory -Force $Dirs[$n] | Out-Null
         }
@@ -1075,7 +1079,7 @@ try {
         catch {
             $m = Get-ErrorText $_
             Write-Warn2 $m
-            foreach ($tool in 'azqr', 'Defender och kostnad') { Set-Status $tool 'Fel' "Azure CLI-inloggning saknas: $m" }
+            foreach ($tool in 'azqr', 'Defender och kostnad', 'Struktur') { Set-Status $tool 'Fel' "Azure CLI-inloggning saknas: $m" }
             $SkipAzqr = $true; $SkipPortal = $true
         }
         if ($azReady -and $subCount -lt 1) {
@@ -1422,8 +1426,8 @@ try {
         # Secure Score, Defender-rekommendationer och kostnad för 12 månader. Allt är read-only och går via
         # Azure Resource Manager (az rest), så inga extra tillägg behövs. Varje källa fångas för sig.
         # ===================================================================
-        Write-Step 9 'Defender och kostnad' 'Hämtar Defender-planer, Secure Score, Defender-rekommendationer och kostnad för 12 månader direkt från Azure (read-only) och sparar dem som CSV i portal\. 1-5 min.'
-        if ($SkipPortal) { Write-Action 'Hoppas över'; Set-SkippedUnlessFailed 'Defender och kostnad' }
+        Write-Step 9 'Defender, kostnad och struktur' 'Hämtar Defender-planer, Secure Score, Defender-rekommendationer, kostnad för 12 månader samt managementgrupper och nätverk (VNet och peerings) direkt från Azure (read-only) och sparar dem som CSV i portal\ och struktur\. 1-5 min.'
+        if ($SkipPortal) { Write-Action 'Hoppas över'; Set-SkippedUnlessFailed 'Defender och kostnad'; Set-SkippedUnlessFailed 'Struktur' }
         else {
             $portalErrors = [System.Collections.Generic.List[string]]::new()
             $portalOk = 0
@@ -1526,6 +1530,22 @@ try {
                 }
             }
             catch { Write-Warn2 $_.Exception.Message; Set-Status 'Defender och kostnad' 'Fel' $_.Exception.Message }
+
+            # Struktur: managementgrupper, virtuella nätverk och peerings, nätverksnoder (lib\Structure.ps1). Read-only.
+            Write-Action 'Hämtar struktur: managementgrupper och nätverk'
+            try {
+                . (Join-Path $ScriptRoot 'lib\Structure.ps1')
+                $structErrors = [System.Collections.Generic.List[string]]::new()
+                $subIds = @(az account list -o json 2>$null | ConvertFrom-Json | Where-Object { $_.state -eq 'Enabled' } | ForEach-Object { $_.id })
+                $rootMg = if ($ManagementGroupId) { $ManagementGroupId } else { $TenantId }
+                $summary = Save-StructureData $Dirs.struktur $rootMg $subIds $structErrors
+                if ($structErrors.Count -eq 0) { Set-Status 'Struktur' 'OK' $summary }
+                else {
+                    foreach ($e in $structErrors) { Write-Warn2 $e }
+                    Set-Status 'Struktur' $(if ($summary) { 'Delvis' } else { 'Fel' }) ($structErrors -join ' | ')
+                }
+            }
+            catch { Write-Warn2 $_.Exception.Message; Set-Status 'Struktur' 'Fel' $_.Exception.Message }
         }
     }
 

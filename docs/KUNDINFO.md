@@ -19,6 +19,7 @@ Det här dokumentet beskriver vad scriptet gör, vad det rör och vad ni behöve
 | Governance Visualizer | Läser management groups, policys och rolltilldelningar | Reader |
 | azqr | Läser resurser och jämför mot Microsofts rekommendationer | Reader |
 | Defender och kostnad | Läser Defender-planer, Secure Score, rekommendationer och kostnad | Security Reader, Cost Management Reader |
+| Struktur | Läser managementgrupper, virtuella nät, peerings och nätverksnoder (Azure Resource Graph) | Reader |
 | Maester (valfritt) | Läser Entra ID-inställningar via Microsoft Graph | Global Reader |
 
 ## Roller som behövs

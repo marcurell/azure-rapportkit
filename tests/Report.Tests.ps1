@@ -178,9 +178,9 @@ Describe 'Write-ReportSite (sidbygge)' {
         $script:Warnings.Clear()
         $script:Index = Write-ReportSite
     }
-    It 'skriver alla sex sidorna och ger startsidan' {
+    It 'skriver alla sju sidorna och ger startsidan' {
         $script:Index | Should -Match 'rapport\.html$'
-        foreach ($f in 'rapport.html', 'rapport-styrning.html', 'rapport-resurser.html', 'rapport-entra.html', 'rapport-defender-kostnad.html', 'rapport-om.html') {
+        foreach ($f in 'rapport.html', 'rapport-struktur.html', 'rapport-styrning.html', 'rapport-resurser.html', 'rapport-entra.html', 'rapport-defender-kostnad.html', 'rapport-om.html') {
             Test-Path (Join-Path $script:RunDir $f) | Should -BeTrue
         }
     }
@@ -193,9 +193,9 @@ Describe 'Write-ReportSite (sidbygge)' {
             ([regex]::Matches($h, 'aria-current="page"')).Count | Should -Be $(if ($f.Name -eq 'rapport-komplett.html') { 0 } else { 1 })
         }
     }
-    It 'PDF-knappen öppnar den samlade rapporten med alla sex sidor' {
+    It 'PDF-knappen öppnar den samlade rapporten med alla sju sidor' {
         $full = Get-Content (Join-Path $script:RunDir 'rapport-komplett.html') -Raw
-        ([regex]::Matches($full, '<section class="rk-sec">')).Count | Should -Be 6
+        ([regex]::Matches($full, '<section class="rk-sec">')).Count | Should -Be 7
         (Get-Content (Join-Path $script:RunDir 'rapport.html') -Raw) | Should -Match 'href="rapport-komplett\.html#skriv" target="_blank"'
     }
     It 'hämtar inget från internet (inga src/href mot externa adresser utom kontaktlänken)' {
@@ -302,5 +302,92 @@ Describe 'Anonymisering' {
         $a | Should -Not -Match 'href='
         $a | Should -Match 'ingår inte i den anonyma versionen'
         (ConvertTo-AnonymousHtml (New-ExtLink 'https://learn.microsoft.com/x' 'Docs')) | Should -Match 'href="https://learn.microsoft.com/x"'
+    }
+}
+
+Describe 'Sidan Struktur' {
+    BeforeAll {
+        $script:RunDir = Join-Path $TestDrive 'struk'
+        $script:Dirs = @{}
+        foreach ($n in 'azqr', 'azgovviz', 'maester', 'portal', 'struktur') { $script:Dirs[$n] = Join-Path $script:RunDir $n; New-Item -ItemType Directory -Force $script:Dirs[$n] | Out-Null }
+        $s = $script:Dirs.struktur
+        @(
+            [pscustomobject]@{ Niva = 0; Id = 'root-tenant'; Namn = 'Tenant Root Group'; Typ = 'Managementgrupp'; Foralder = '' }
+            [pscustomobject]@{ Niva = 1; Id = 'mg-plattform'; Namn = 'Plattform'; Typ = 'Managementgrupp'; Foralder = 'root-tenant' }
+            [pscustomobject]@{ Niva = 2; Id = 'mg-connectivity'; Namn = 'Connectivity'; Typ = 'Managementgrupp'; Foralder = 'mg-plattform' }
+            [pscustomobject]@{ Niva = 3; Id = '11111111-1111-1111-1111-111111111111'; Namn = 'Kundbolaget Hub'; Typ = 'Prenumeration'; Foralder = 'mg-connectivity' }
+            [pscustomobject]@{ Niva = 1; Id = '22222222-2222-2222-2222-222222222222'; Namn = 'Kundbolaget Prod'; Typ = 'Prenumeration'; Foralder = 'root-tenant' }
+        ) | Export-Csv (Join-Path $s 'managementgrupper.csv') -NoTypeInformation -Encoding utf8
+        $hub = '/subscriptions/11111111-1111-1111-1111-111111111111/resourceGroups/rg-nat/providers/Microsoft.Network/virtualNetworks/vnet-hubben'
+        $a = '/subscriptions/22222222-2222-2222-2222-222222222222/resourceGroups/rg-a/providers/Microsoft.Network/virtualNetworks/vnet-spoke-a'
+        $b = '/subscriptions/22222222-2222-2222-2222-222222222222/resourceGroups/rg-b/providers/Microsoft.Network/virtualNetworks/vnet-spoke-b'
+        $iso = '/subscriptions/22222222-2222-2222-2222-222222222222/resourceGroups/rg-c/providers/Microsoft.Network/virtualNetworks/vnet-ensam'
+        @(
+            [pscustomobject]@{ Id = $hub; Namn = 'vnet-hubben'; Prenumeration = '11111111-1111-1111-1111-111111111111'; Resursgrupp = 'rg-nat'; Plats = 'northeurope'; Adressrymd = '10.0.0.0/16'; Subnat = 2 }
+            [pscustomobject]@{ Id = $a; Namn = 'vnet-spoke-a'; Prenumeration = '22222222-2222-2222-2222-222222222222'; Resursgrupp = 'rg-a'; Plats = 'northeurope'; Adressrymd = '10.1.0.0/16'; Subnat = 1 }
+            [pscustomobject]@{ Id = $b; Namn = 'vnet-spoke-b'; Prenumeration = '22222222-2222-2222-2222-222222222222'; Resursgrupp = 'rg-b'; Plats = 'northeurope'; Adressrymd = '10.2.0.0/16'; Subnat = 1 }
+            [pscustomobject]@{ Id = $iso; Namn = 'vnet-ensam'; Prenumeration = '22222222-2222-2222-2222-222222222222'; Resursgrupp = 'rg-c'; Plats = 'westeurope'; Adressrymd = '10.1.5.0/24'; Subnat = 1 }
+        ) | Export-Csv (Join-Path $s 'natverk-vnet.csv') -NoTypeInformation -Encoding utf8
+        $pe = { param($fi, $f, $ti, $t, $transit) [pscustomobject]@{ FranId = $fi; Fran = $f; TillId = $ti; Till = $t; Status = 'Connected'; GatewayTransit = $transit; AnvandRemoteGateways = $false; ForwardedTraffic = $true; TillAdressrymd = '' } }
+        @(
+            (& $pe $hub 'vnet-hubben' $a 'vnet-spoke-a' $true), (& $pe $a 'vnet-spoke-a' $hub 'vnet-hubben' $false),
+            (& $pe $hub 'vnet-hubben' $b 'vnet-spoke-b' $true)     # saknar motsvarande peering från spoke-b: ensidig
+        ) | Export-Csv (Join-Path $s 'natverk-peerings.csv') -NoTypeInformation -Encoding utf8
+        @([pscustomobject]@{ Typ = 'azurefirewalls'; Namn = 'fw-hubben'; Prenumeration = '11111111-1111-1111-1111-111111111111'; Resursgrupp = 'rg-nat'; Plats = 'northeurope'; Extra = 'AZFW_VNet'; VnetId = $hub }) | Export-Csv (Join-Path $s 'natverk-noder.csv') -NoTypeInformation -Encoding utf8
+        @([pscustomobject]@{ Prenumeration = '11111111-1111-1111-1111-111111111111'; Resurser = 42 }) | Export-Csv (Join-Path $s 'resurser-per-prenumeration.csv') -NoTypeInformation -Encoding utf8
+
+        $script:TenantId = '99999999-8888-7777-6666-555555555555'; $script:Period = '2026-10'
+        $script:KitVersion = 'test'; $script:Pins = @{ Azqr = '1'; Maester = '1'; Pester = '1'; AzAccounts = '1' }; $script:GvVersion = '6'
+        $script:HidePersonalData = $false; $script:LatestTools = $false
+        $script:Status = [ordered]@{}
+        $script:RunStart = Get-Date
+        $script:BrandingDir = Join-Path $script:ScriptRoot 'branding-exempel\neutral'
+        $script:Anonymize = $true
+        $script:Warnings.Clear()
+        Write-ReportSite | Out-Null
+    }
+    AfterAll { $script:Anonymize = $false; $script:BrandingDir = $null }
+
+    It 'ConvertTo-CidrRange hanterar IPv4 och ignorerar annat' {
+        $r = ConvertTo-CidrRange '10.0.0.0/16'
+        ($r[1] - $r[0] + 1) | Should -Be 65536
+        ConvertTo-CidrRange 'fd00::/8' | Should -BeNullOrEmpty
+        ConvertTo-CidrRange '10.0.0.999/16' | Should -BeNullOrEmpty
+    }
+    It 'bygger sidan med träd, bild och tabeller' {
+        $h = Get-PageText 'rapport-struktur.html'
+        $h | Should -Match '<svg class="net-svg"'
+        $h | Should -Match 'Plattform'
+        $h | Should -Match 'Kundbolaget Hub'
+        $h | Should -Match '42 resurser'
+        $h | Should -Match 'fw-hubben'
+    }
+    It 'sätter roller: hub, spoke och isolerat' {
+        $m = Get-NetworkModel @{ Vnets = @(Import-Csv (Join-Path $script:Dirs.struktur 'natverk-vnet.csv')); Peerings = @(Import-Csv (Join-Path $script:Dirs.struktur 'natverk-peerings.csv')); NetNodes = @(Import-Csv (Join-Path $script:Dirs.struktur 'natverk-noder.csv')); MgRows = @() }
+        $role = @{}; foreach ($v in $m.Vnets) { $role[$v.Namn] = $m.Role[([string]$v.Id).ToLower()] }
+        $role['vnet-hubben'] | Should -Be 'Hub'
+        $role['vnet-spoke-a'] | Should -Be 'Spoke'
+        $role['vnet-ensam'] | Should -Be 'Isolerat'
+    }
+    It 'flaggar isolerade nät, ensidig peering och överlappande adressrymder' {
+        $h = Get-PageText 'rapport-struktur.html'
+        $h | Should -Match 'Isolerade virtuella nät utan peering \(1\):</b> vnet-ensam'
+        $h | Should -Match 'Ensidiga peerings \(1\):</b>'
+        $h | Should -Match 'Överlappande adressrymder mellan olika nät \(1\):</b>'
+        $h | Should -Match 'Hub-and-spoke'
+    }
+    It 'den anonyma versionen saknar namn, ID:n och IP-adresser men behåller strukturen' {
+        $h = [System.Web.HttpUtility]::HtmlDecode((Get-Content (Join-Path $script:RunDir 'anonym\rapport-struktur.html') -Raw))
+        $h | Should -Not -Match 'vnet-hubben|vnet-spoke|vnet-ensam|fw-hubben|Kundbolaget|Plattform|rg-nat|11111111-1111|22222222-2222|99999999-8888'
+        $h | Should -Not -Match '10\.0\.0\.0|10\.1\.0\.0|10\.2\.0\.0|10\.1\.5\.0'
+        $h | Should -Match '<svg class="net-svg"'
+        $h | Should -Match 'VNet 1'
+        $h | Should -Match '/16'
+    }
+    It 'faller tillbaka på Governance Visualizers uppgifter när struktur\ saknas' {
+        $d = @{ GvPresent = $true; GvRoles = @([pscustomobject]@{ Level = 0; MgId = 'root'; MgName = 'Tenant Root Group'; MgParentId = '__TenantRoot' }, [pscustomobject]@{ Level = 1; MgId = 'mg1'; MgName = 'Plattform'; MgParentId = 'root' }); GvPolicies = $null; GvSubs = @([pscustomobject]@{ SubscriptionId = 's1'; Subscription = 'Min sub'; ManagementGroupPath = 'root/mg1' }) }
+        $rows = Get-MgRowsFromGovViz $d
+        @($rows | Where-Object Typ -eq 'Managementgrupp').Count | Should -Be 2
+        ($rows | Where-Object Id -eq 's1').Foralder | Should -Be 'mg1'
     }
 }

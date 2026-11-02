@@ -16,6 +16,7 @@
 
 Add-Type -AssemblyName System.Web
 . (Join-Path $ScriptRoot 'lib\Anonymize.ps1')
+. (Join-Path $ScriptRoot 'lib\StructurePage.ps1')
 
 # ===========================================================================
 # Hjälpare
@@ -236,6 +237,24 @@ td.num,th.num{text-align:right;white-space:nowrap}
 .rk-ext{font-size:.85em}
 .rk-foot{max-width:1120px;margin:0 auto;padding:16px 20px 40px;color:var(--rk-muted);font-size:12.5px;border-top:1px solid var(--rk-border);display:flex;justify-content:space-between;gap:12px;flex-wrap:wrap}
 @media (max-width:700px){table{display:block;overflow-x:auto}.rk-meta{text-align:left}.rk-top-in{padding:12px 14px}.rk-main{padding:18px 14px 30px}}
+.tree,.tree ul{list-style:none;margin:0;padding-left:24px;border-left:1px solid var(--rk-border)}
+.tree{padding-left:0;border-left:0}
+.tree li{margin:8px 0}
+.tree .nm{font-weight:600}
+.tree .sub .nm{font-weight:500}
+.tree .tag{font-size:12.5px;color:var(--rk-muted);margin-left:10px}
+.net-card{padding:8px;overflow-x:auto}
+.net-svg{width:100%;height:auto;min-width:640px;display:block}
+.net-edge{stroke:var(--rk-muted);stroke-width:2.5}
+.net-edge.warn{stroke:var(--rk-medium);stroke-dasharray:8 6}
+.net-edge.bad{stroke:var(--rk-high);stroke-dasharray:8 6}
+.net-node{fill:var(--rk-surface);stroke:var(--rk-border);stroke-width:1.5}
+.net-node.hub{stroke:var(--rk-accent);stroke-width:3.5}
+.net-node.ext{stroke-dasharray:5 4}
+.net-t{fill:var(--rk-text);font:600 15px var(--rk-font)}
+.net-s{fill:var(--rk-muted);font:13px var(--rk-font)}
+.net-key.warn{color:var(--rk-medium);font-weight:700}
+.net-key.bad{color:var(--rk-high);font-weight:700}
 .rk-sec{margin-top:36px;padding-top:8px;border-top:1px solid var(--rk-border)}
 @media print{.rk-sec{break-before:page;margin-top:0;border-top:0;padding-top:0}.rk-sec:first-of-type{break-before:auto}.rk-nav,.noprint{display:none}body{background:#fff;color:#000}.rk-top{border-top-width:4px}h2,h3{break-after:avoid}table,.tile,.card{break-inside:avoid}a{color:inherit;text-decoration:none}.rk-main{padding-top:10px}}
 '@
@@ -397,6 +416,9 @@ function Get-ReportData {
     $d.Recs = & $rd 'defender-rekommendationer.csv' @('Rekommendation', 'Status', 'Allvarlighet', 'Resurs')
     $d.Costs = & $rd 'kostnad.csv' @('Prenumeration', 'Manad', 'Kostnad', 'Valuta')
     $d.PortalPresent = [bool]($d.Plans -or $d.Scores -or $d.Ctrls -or $d.Recs -or $d.Costs)
+
+    # Struktur: managementgrupper och nätverk (lib\StructurePage.ps1)
+    Read-StructureData $d
     $d
 }
 
@@ -650,6 +672,9 @@ function Get-OverviewPageHtml($d, $Pages) {
         if ($null -ne $d.GvRoles) { [void]$sb.Append((Tile 'Rolltilldelningar' @($d.GvRoles).Count '' $file.styrning)) }
         if ($null -ne $d.GvPolicies) { [void]$sb.Append((Tile 'Policytilldelningar' @($d.GvPolicies).Count '' $file.styrning)) }
     }
+    if ($d.Vnets) {
+        [void]$sb.Append((Tile 'Virtuella nät' @($d.Vnets | Where-Object { $_ }).Count '' $file.struktur))
+    }
     if ($d.MaesterPresent) {
         [void]$sb.Append((Tile 'Entra-tester godkända' $d.Maester.PassedCount 'ok' $file.entra))
         [void]$sb.Append((Tile 'Entra-tester underkända' $d.Maester.FailedCount 'high' $file.entra))
@@ -680,11 +705,18 @@ function Get-OverviewPageHtml($d, $Pages) {
         $priv = @($d.GvRoles | Where-Object { $_.RoleClear -in 'Owner', 'User Access Administrator' }).Count
         if ($priv) { $obs.Add(('Styrning: {0} tilldelningar av Owner eller User Access Administrator. <a href="{1}">Se Styrning</a>.' -f $priv, $file.styrning)) }
     }
+    if ($d.Vnets) {
+        $m = Get-NetworkModel $d
+        $iso = @($m.Vnets | Where-Object { $m.Role[([string]$_.Id).ToLower()] -eq 'Isolerat' }).Count
+        $notConn = @($m.Edges | Where-Object State -eq 'bad').Count
+        if ($iso -or $notConn -or $m.Overlaps.Count) { $obs.Add(('Nätverk: {0} isolerade virtuella nät, {1} peering(s) som inte är Connected och {2} överlappande adressrymder. <a href="{3}">Se Struktur</a>.' -f $iso, $notConn, $m.Overlaps.Count, $file.struktur)) }
+    }
     if ($Warnings.Count) { $obs.Add(('{0} varning(ar) om underlagets kvalitet. <a href="{1}">Se Om körningen</a>.' -f $Warnings.Count, $file.om)) }
     if ($obs.Count) { [void]$sb.Append('<h2>Det som sticker ut</h2><p class="muted">Automatiskt framtagna iakttagelser ur siffrorna. Det är inte en bedömning: de är en startpunkt för genomgången.</p><ul>' + (($obs | ForEach-Object { "<li>$_</li>" }) -join '') + '</ul>') }
 
     [void]$sb.Append('<h2>Sidor i rapporten</h2><div class="cards">')
     $descr = @{
+        struktur = 'Managementgrupper, prenumerationer, virtuella nät, peerings och nätverksnoder: hur tenanten är uppbyggd.'
         styrning = 'Prenumerationer, rolltilldelningar, privilegierade konton, policys och taggning (Governance Visualizer).'
         resurser = 'Resurser och rekommendationer per kategori, plus Azure Advisor (azqr).'
         entra    = 'Tester av Entra ID: vad som är godkänt, underkänt och vad som inte kunde kontrolleras (Maester).'
@@ -754,6 +786,7 @@ function Write-ReportSite {
     $theme = Get-BrandTheme $BrandingDir     # $BrandingDir sätts bara av testerna; annars används branding\
     $pages = @(
         @{ Key = 'oversikt'; File = 'rapport.html'; Title = 'Översikt'; Lead = 'Läget i miljön, sammanfattat från verktygens resultat.' },
+        @{ Key = 'struktur'; File = 'rapport-struktur.html'; Title = 'Struktur'; Lead = 'Hur tenanten är uppbyggd: managementgrupper, prenumerationer, virtuella nät och peerings.' },
         @{ Key = 'styrning'; File = 'rapport-styrning.html'; Title = 'Styrning'; Lead = 'Prenumerationer, behörigheter och policys. Sammanställt från Azure Governance Visualizer.' },
         @{ Key = 'resurser'; File = 'rapport-resurser.html'; Title = 'Resurser'; Lead = 'Vilka resurser som finns och vad Microsofts rekommendationer säger om dem. Sammanställt från azqr.' },
         @{ Key = 'entra'; File = 'rapport-entra.html'; Title = 'Entra ID'; Lead = 'Tester av inställningarna i Entra ID. Sammanställt från Maester.' },
@@ -766,6 +799,7 @@ function Write-ReportSite {
     $d = Get-ReportData
     $builders = @{
         oversikt = { Get-OverviewPageHtml $d $pages }
+        struktur = { Get-StructurePageHtml $d }
         styrning = { Get-GovernancePageHtml $d }
         resurser = { Get-ResourcesPageHtml $d }
         entra    = { Get-EntraPageHtml $d }
@@ -773,7 +807,7 @@ function Write-ReportSite {
         om       = { Get-AboutPageHtml $d $theme }
     }
     # "Om körningen" byggs sist, så att varningar som uppstår när de andra sidorna byggs kommer med.
-    $order = 'styrning', 'resurser', 'entra', 'defender', 'oversikt', 'om'
+    $order = 'struktur', 'styrning', 'resurser', 'entra', 'defender', 'oversikt', 'om'
     $content = @{}
     foreach ($key in $order) {
         try { $content[$key] = (& $builders[$key]) -join '' }
