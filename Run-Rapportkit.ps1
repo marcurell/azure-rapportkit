@@ -152,7 +152,7 @@ $TotalSteps = 10
 # Governance Visualizer is fetched as a fixed version (the one that was tested). Changed on purpose, not by accident.
 $GvVersion = '6.7.2'
 $GvUrl = "https://github.com/Azure/Azure-Governance-Visualizer/archive/refs/tags/$GvVersion.zip"
-$KitVersion = '1.4.0'
+$KitVersion = '1.4.1'
 
 # Tested (pinned) tool versions, and checksums (SHA256) for the zip files that are fetched directly. The customer then gets
 # the same tools that we tested, and a changed file is detected. Tools installed via winget are checked by winget
@@ -1410,7 +1410,7 @@ try {
                         Add-Warning 'Maester wrote no maester.json (may be due to blocked writing, see the README). Summarising from the result object instead.'
                         [pscustomobject]@{
                             PassedCount = $res.PassedCount; FailedCount = $res.FailedCount; SkippedCount = $res.SkippedCount
-                            Tests = @($res.Tests | ForEach-Object { [pscustomobject]@{ Name = $_.Name; Result = $_.Result } })
+                            Tests = @($res.Tests | ForEach-Object { [pscustomobject]@{ Id = $_.Id; Name = $_.Name; Result = $_.Result } })
                         } | ConvertTo-Json -Depth 4 | Set-Content $mtJson -Encoding utf8
                     }
                     else {
@@ -1455,7 +1455,7 @@ try {
                     # Defender plans (on/off per service)
                     try {
                         $r = Invoke-ArmRest 'GET' "https://management.azure.com/subscriptions/$sid/providers/Microsoft.Security/pricings?api-version=2024-01-01"
-                        foreach ($p in @($r.value)) { $planRows.Add([pscustomobject]@{ Prenumeration = $sname; Plan = $p.name; Niva = $p.properties.pricingTier; Delplan = $p.properties.subPlan }) }
+                        foreach ($p in @($r.value)) { $planRows.Add([pscustomobject]@{ PrenumerationId = $sid; Prenumeration = $sname; Plan = $p.name; Niva = $p.properties.pricingTier; Delplan = $p.properties.subPlan }) }
                         $portalOk++
                     }
                     catch { $portalErrors.Add("Defender plans ($sname): $($_.Exception.Message)") }
@@ -1463,7 +1463,7 @@ try {
                     # Secure Score
                     try {
                         $r = Invoke-ArmRest 'GET' "https://management.azure.com/subscriptions/$sid/providers/Microsoft.Security/secureScores?api-version=2020-01-01"
-                        foreach ($sc in @($r.value)) { $scoreRows.Add([pscustomobject]@{ Prenumeration = $sname; Poang = $sc.properties.score.current; Max = $sc.properties.score.max; Andel = $sc.properties.score.percentage }) }
+                        foreach ($sc in @($r.value)) { $scoreRows.Add([pscustomobject]@{ PrenumerationId = $sid; Prenumeration = $sname; Poang = $sc.properties.score.current; Max = $sc.properties.score.max; Andel = $sc.properties.score.percentage }) }
                         $portalOk++
                     }
                     catch { $portalErrors.Add("Secure Score ($sname): $($_.Exception.Message)") }
@@ -1472,7 +1472,7 @@ try {
                     # individual recommendations can be incomplete: the controls show how many resources are unhealthy.
                     try {
                         $r = Invoke-ArmRest 'GET' "https://management.azure.com/subscriptions/$sid/providers/Microsoft.Security/secureScoreControls?api-version=2020-01-01"
-                        foreach ($c in @($r.value)) { $ctrlRows.Add([pscustomobject]@{ Prenumeration = $sname; Kontroll = $c.properties.displayName; Poang = $c.properties.score.current; Max = $c.properties.score.max; Osunda = [int]$c.properties.unhealthyResourceCount; Friska = [int]$c.properties.healthyResourceCount }) }
+                        foreach ($c in @($r.value)) { $ctrlRows.Add([pscustomobject]@{ PrenumerationId = $sid; Prenumeration = $sname; KontrollId = $c.name; Kontroll = $c.properties.displayName; Poang = $c.properties.score.current; Max = $c.properties.score.max; Osunda = [int]$c.properties.unhealthyResourceCount; Friska = [int]$c.properties.healthyResourceCount }) }
                         $portalOk++
                     }
                     catch { $portalErrors.Add("Secure Score controls ($sname): $($_.Exception.Message)") }
@@ -1488,7 +1488,7 @@ try {
                                 # Defender can return the same page again via a nextLink that points at itself: skip duplicates.
                                 if ($a.id -and $seenIds.ContainsKey($a.id)) { continue }
                                 if ($a.id) { $seenIds[$a.id] = $true }
-                                $recRows.Add([pscustomobject]@{ Prenumeration = $sname; Rekommendation = $a.properties.displayName; Status = $a.properties.status.code; Allvarlighet = $a.properties.metadata.severity; Resurs = $a.properties.resourceDetails.Id })
+                                $recRows.Add([pscustomobject]@{ PrenumerationId = $sid; Prenumeration = $sname; Nyckel = $a.name; Rekommendation = $a.properties.displayName; Status = $a.properties.status.code; Allvarlighet = $a.properties.metadata.severity; Resurs = $a.properties.resourceDetails.Id })
                             }
                             $url = $r.nextLink
                         }
@@ -1511,7 +1511,7 @@ try {
                             $mv = $row[$iMonth]
                             $ms = if ($mv -is [datetime]) { $mv.ToString('yyyy-MM-dd', [System.Globalization.CultureInfo]::InvariantCulture) } else { [string]$mv }
                             $month = if ($ms -match '^\d{8}$') { $ms.Substring(0, 4) + '-' + $ms.Substring(4, 2) } else { $ms.Substring(0, [Math]::Min(7, $ms.Length)) }
-                            $costRows.Add([pscustomobject]@{ Prenumeration = $sname; Manad = $month; Kostnad = [math]::Round([double]$row[$iCost], 2); Valuta = $(if ($iCur -ge 0) { $row[$iCur] } else { '' }) })
+                            $costRows.Add([pscustomobject]@{ PrenumerationId = $sid; Prenumeration = $sname; Manad = $month; Kostnad = [math]::Round([double]$row[$iCost], 2); Valuta = $(if ($iCur -ge 0) { $row[$iCur] } else { '' }) })
                         }
                         $portalOk++
                     }

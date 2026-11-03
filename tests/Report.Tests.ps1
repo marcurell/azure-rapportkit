@@ -167,10 +167,12 @@ Describe 'Write-ReportSite (sidbygge)' {
         "Validated Using,Source,Category,Impact,Resource Type,Recommendation,Recommendation Id,Subscription Id,Subscription Name,Resource Group,Resource Name`nARG,APRL,Security,High,Microsoft.Web/sites,Använd HTTPS,r1,s1,Sub,rg,app1" | Set-Content (Join-Path $script:Dirs.azqr 'azqr_x.impacted.csv') -Encoding utf8
         "Subscription Id,Resource Group,Location,Resource Type,Resource Name`ns1,rg,westeurope,microsoft.web/sites,app1" | Set-Content (Join-Path $script:Dirs.azqr 'azqr_x.inventory.csv') -Encoding utf8
         "Prenumeration,Plan,Niva,Delplan`nSub,VirtualMachines,Free," | Set-Content (Join-Path $script:Dirs.portal 'defender-planer.csv') -Encoding utf8
-        "Prenumeration,Poang,Max,Andel`nSub,4,14,0.2857" | Set-Content (Join-Path $script:Dirs.portal 'secure-score.csv') -Encoding utf8
+        "PrenumerationId,Prenumeration,Poang,Max,Andel`ns1,Sub,4,14,0.2857" | Set-Content (Join-Path $script:Dirs.portal 'secure-score.csv') -Encoding utf8
         "Prenumeration,Manad,Kostnad,Valuta`nSub,2026-09,100,SEK`nSub,2026-10,150,SEK" | Set-Content (Join-Path $script:Dirs.portal 'kostnad.csv') -Encoding utf8
         $mt = Join-Path $script:Dirs.maester 'test-results'; New-Item -ItemType Directory $mt | Out-Null
         @{ PassedCount = 1; FailedCount = 1; SkippedCount = 1; Tests = @(@{ Name = 'MT.1'; Result = 'Failed'; ResultDetail = @{ TestSkipped = $null } }, @{ Name = 'MT.2'; Result = 'Skipped'; ResultDetail = @{ TestSkipped = 'NotLicensedEntraIDP1' } }, @{ Name = 'MT.3'; Result = 'Passed'; ResultDetail = @{ TestSkipped = $null } }) } | ConvertTo-Json -Depth 6 | Set-Content (Join-Path $mt 'maester.json') -Encoding utf8
+        # Varje Maester-körning lämnar en egen tidsstämplad HTML; rapporten ska länka till den senaste.
+        foreach ($t in '2026-10-30-151835', '2026-10-30-162523') { '<html></html>' | Set-Content (Join-Path $mt "TestResults-$t.html") -Encoding utf8 }
 
         $script:TenantId = '00000000-0000-0000-0000-000000000000'; $script:Period = '2026-10'
         $script:KitVersion = 'test'; $script:Pins = @{ Azqr = '1'; Maester = '1'; Pester = '1'; AzAccounts = '1' }; $script:GvVersion = '6'
@@ -213,6 +215,12 @@ Describe 'Write-ReportSite (sidbygge)' {
         (Get-PageText 'rapport-resurser.html') | Should -Match 'Använd HTTPS'
         (Get-PageText 'rapport-entra.html') | Should -Match 'Licens saknas: Entra ID P1'
         (Get-PageText 'rapport-defender-kostnad.html') | Should -Match '2026-10'
+    }
+    It 'läser Defender-filer med de nya id-kolumnerna och länkar till senaste Maester-rapporten' {
+        (Get-PageText 'rapport-defender-kostnad.html') | Should -Match '4/14'
+        $h = Get-Content (Join-Path $script:RunDir 'rapport-entra.html') -Raw
+        $h | Should -Match 'TestResults-2026-10-30-162523\.html'
+        $h | Should -Not -Match 'TestResults-2026-10-30-151835\.html'
     }
     It 'ger begripliga tomsidor när underlag saknas (Styrning utan Governance Visualizer)' {
         (Get-PageText 'rapport-styrning.html') | Should -Match 'Governance Visualizer har inte körts'

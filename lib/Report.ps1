@@ -408,7 +408,8 @@ function Get-ReportData {
             else { $d.Maester = $m; $d.MaesterPresent = $true }
         }
         catch { Add-Warning "maester.json could not be read: $($_.Exception.Message)" }
-        $d.MaesterHtml = Get-ChildItem -LiteralPath $Dirs.maester -Filter '*.html' -Recurse -ErrorAction SilentlyContinue | Select-Object -First 1
+        # Every Maester run in the same folder leaves its own timestamped TestResults-<time>.html; the name sorts by time, so link to the newest.
+        $d.MaesterHtml = Get-ChildItem -LiteralPath $Dirs.maester -Filter '*.html' -Recurse -ErrorAction SilentlyContinue | Where-Object { $_.FullName -like '*test-results*' } | Sort-Object Name -Descending | Select-Object -First 1
     }
 
     # Defender and cost
