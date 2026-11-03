@@ -17,9 +17,9 @@ BeforeAll {
         $tests = @(
             @{ Id = 'MT.1'; Title = 'One'; Name = 'MT.1: One'; Severity = 'High'; Block = 'Maester'; Result = 'Failed'; ResultDetail = @{ TestDescription = 'Generic text'; TestResult = 'Tenant specific' } },
             @{ Id = 'MT.2'; Title = 'Two'; Name = 'MT.2: Two'; Severity = ''; Block = 'Maester'; Result = 'Skipped'; ResultDetail = @{ TestDescription = 'More'; SkippedReason = 'NotLicensed' } })
-        @{ TenantId = '00000000-0000-0000-0000-000000000001'; ExecutedAt = '2026-10-30T15:00:00+01:00'; PassedCount = 0; FailedCount = 1; SkippedCount = 1; Tests = $tests } | ConvertTo-Json -Depth 6 | Set-Content (Join-Path $Root 'maester\test-results\maester.json') -Encoding utf8
-        # Older, different TestResults file: must lose against maester.json
-        @{ Tests = @(@{ Id = 'MT.9'; Title = 'Old'; Name = 'MT.9'; Result = 'Passed' }) } | ConvertTo-Json -Depth 4 | Set-Content (Join-Path $Root 'maester\test-results\TestResults-2026-10-30-100000.json') -Encoding utf8
+        @{ TenantId = '00000000-0000-0000-0000-000000000001'; ExecutedAt = '2026-10-30T15:00:00+01:00'; PassedCount = 0; FailedCount = 1; SkippedCount = 1; Tests = $tests } | ConvertTo-Json -Depth 6 | Set-Content (Join-Path $Root 'maester\test-results\TestResults-2026-10-30-150000.json') -Encoding utf8
+        # A maester.json left over from an earlier run (the collector's summary): must lose against the newer TestResults file
+        @{ Tests = @(@{ Id = 'MT.9'; Title = 'Old'; Name = 'MT.9'; Result = 'Passed' }) } | ConvertTo-Json -Depth 4 | Set-Content (Join-Path $Root 'maester\test-results\maester.json') -Encoding utf8
         if ($OldFormat) {
             "Prenumeration,Poang,Max,Andel`nSub,4,14,""0,2857""" | Set-Content (Join-Path $Root 'portal\secure-score.csv') -Encoding utf8
             "Prenumeration,Rekommendation,Status,Allvarlighet,Resurs`nSub,Enable MFA now,Unhealthy,High,/subscriptions/$sid" | Set-Content (Join-Path $Root 'portal\defender-rekommendationer.csv') -Encoding utf8
@@ -99,7 +99,7 @@ Describe 'New-RunPackage med en 1.4.2-körning' {
         ($f | Where-Object source -eq 'defender').ruleId | Should -Be 'aaa-111'
         @($f.key | Select-Object -Unique).Count | Should -Be @($f).Count
     }
-    It 'tar Maester från maester.json, inte från en äldre TestResults-fil' {
+    It 'tar Maester från den senaste TestResults-filen, inte från en kvarlämnad maester.json' {
         $f = Read-Lines (Join-Path $script:Data 'findings.jsonl')
         ($f | Where-Object ruleId -eq 'mt.9') | Should -BeNullOrEmpty
         ($f | Where-Object ruleId -eq 'mt.1').status | Should -Be 'open'

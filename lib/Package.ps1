@@ -103,13 +103,14 @@ function Get-AzqrRows([string]$Dir) {
     $out
 }
 
-# Maester: maester.json if there is one, otherwise the newest TestResults-*.json (the names sort by time).
+# Maester: the newest TestResults-*.json (the names sort by time). maester.json is only the collector's own summary, used when Maester
+# left no TestResults file; it can also be left over from an earlier run in the same folder, so it must never win over a TestResults file.
 function Get-MaesterRows([string]$Dir) {
     $out = @{ Findings = @(); Rules = @(); TenantId = ''; ExecutedAt = '' }
     if (-not (Test-Path -LiteralPath $Dir)) { return $out }
     $files = @(Get-ChildItem -LiteralPath $Dir -Filter '*.json' -Recurse -File -ErrorAction SilentlyContinue | Where-Object { $_.FullName -like '*test-results*' })
-    $f = $files | Where-Object Name -eq 'maester.json' | Select-Object -First 1
-    if (-not $f) { $f = $files | Where-Object Name -like 'TestResults-*.json' | Sort-Object Name -Descending | Select-Object -First 1 }
+    $f = $files | Where-Object Name -like 'TestResults-*.json' | Sort-Object Name -Descending | Select-Object -First 1
+    if (-not $f) { $f = $files | Where-Object Name -eq 'maester.json' | Select-Object -First 1 }
     if (-not $f) { return $out }
     $m = Get-Content -LiteralPath $f.FullName -Raw -Encoding UTF8 | ConvertFrom-Json
     if ($m.PSObject.Properties.Name -contains 'TenantId') { $out.TenantId = [string]$m.TenantId }

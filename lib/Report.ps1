@@ -399,10 +399,11 @@ function Get-ReportData {
 
     # Maester
     $d.MaesterPresent = $false
-    # maester.json is what the collector asks Maester to write; without it the newest TestResults-<time>.json is used.
+    # The newest TestResults-<time>.json is used (the names sort by time). maester.json is the collector's own summary: it is only a fallback,
+    # because it can be left over from an earlier run in the same folder.
     $mFiles = @(Get-ChildItem -LiteralPath $Dirs.maester -Filter '*.json' -Recurse -ErrorAction SilentlyContinue | Where-Object { $_.FullName -like '*test-results*' })
-    $mj = $mFiles | Where-Object Name -eq 'maester.json' | Select-Object -First 1
-    if (-not $mj) { $mj = $mFiles | Sort-Object LastWriteTime, Name -Descending | Select-Object -First 1 }
+    $mj = $mFiles | Where-Object Name -like 'TestResults-*.json' | Sort-Object Name -Descending | Select-Object -First 1
+    if (-not $mj) { $mj = $mFiles | Where-Object Name -eq 'maester.json' | Select-Object -First 1 }
     if ($mj) {
         try {
             $m = Get-Content -LiteralPath $mj.FullName -Raw | ConvertFrom-Json

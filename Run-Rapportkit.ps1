@@ -152,7 +152,7 @@ $TotalSteps = 10
 # Governance Visualizer is fetched as a fixed version (the one that was tested). Changed on purpose, not by accident.
 $GvVersion = '6.7.2'
 $GvUrl = "https://github.com/Azure/Azure-Governance-Visualizer/archive/refs/tags/$GvVersion.zip"
-$KitVersion = '1.4.3'
+$KitVersion = '1.4.4'
 
 # Tested (pinned) tool versions, and checksums (SHA256) for the zip files that are fetched directly. The customer then gets
 # the same tools that we tested, and a changed file is detected. Tools installed via winget are checked by winget
@@ -1423,8 +1423,12 @@ try {
                 $mtOut = Join-Path $Dirs.maester 'test-results'
                 $mtJson = Join-Path $mtOut 'maester.json'
                 New-Item -ItemType Directory -Force $mtOut | Out-Null      # the folder must exist before Maester writes there
+                # A maester.json from an earlier run in the same folder would otherwise pass for this run's result.
+                Remove-Item -LiteralPath $mtJson -Force -ErrorAction SilentlyContinue
+                $mtStarted = Get-Date
                 $res = Invoke-Maester -Path $testsDir -OutputFolder $mtOut -OutputJsonFile $mtJson -NonInteractive -PassThru | Select-Object -Last 1
-                if (-not (Test-Path $mtJson)) {
+                $mtFresh = @(Get-ChildItem -LiteralPath $mtOut -Filter 'TestResults-*.json' -ErrorAction SilentlyContinue | Where-Object LastWriteTime -ge $mtStarted)
+                if (-not (Test-Path $mtJson) -and -not $mtFresh) {
                     # Maester wrote no JSON file. If there is a result object we write a summary of our own from it.
                     if ($res -and (@($res.PSObject.Properties.Name) -contains 'PassedCount')) {
                         Add-Warning 'Maester wrote no maester.json (may be due to blocked writing, see the README). Summarising from the result object instead.'

@@ -250,14 +250,14 @@ Describe 'Val av resultatfiler när en mapp har flera körningar' {
         (Find-ResultFile $d '*_x.csv').Name | Should -Be 'A_20261030_153226_x.csv'
         Find-ResultFile (Join-Path $d 'finns-inte') '*.csv' | Should -BeNullOrEmpty
     }
-    It 'läser maester.json om den finns, annars den senaste TestResults-filen' {
+    It 'läser den senaste TestResults-filen, och maester.json bara om det inte finns någon' {
         $mt = Join-Path $script:Dirs.maester 'test-results'; New-Item -ItemType Directory $mt | Out-Null
         $mk = { param($name, $passed, $time) $p = Join-Path $mt $name; @{ PassedCount = $passed; FailedCount = 0; SkippedCount = 0; Tests = @() } | ConvertTo-Json | Set-Content $p -Encoding utf8; (Get-Item $p).LastWriteTime = $time }
+        & $mk 'maester.json' 7 (Get-Date).AddHours(-1)             # left over from an earlier run, written last of all
+        (Get-ReportData).Maester.PassedCount | Should -Be 7        # nothing else: the fallback is used
         & $mk 'TestResults-2026-10-30-100000.json' 1 (Get-Date).AddHours(-3)
         & $mk 'TestResults-2026-10-30-120000.json' 2 (Get-Date).AddHours(-2)
-        (Get-ReportData).Maester.PassedCount | Should -Be 2        # no maester.json: the newest TestResults file
-        & $mk 'maester.json' 7 (Get-Date).AddHours(-4)
-        (Get-ReportData).Maester.PassedCount | Should -Be 7        # maester.json is what the collector asked for
+        (Get-ReportData).Maester.PassedCount | Should -Be 2        # the newest TestResults file wins over maester.json
     }
 }
 
