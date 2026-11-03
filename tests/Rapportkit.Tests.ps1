@@ -10,7 +10,7 @@ BeforeAll {
     $script:ScriptPath = Join-Path $PSScriptRoot '..\Run-Rapportkit.ps1'
     $ast = [System.Management.Automation.Language.Parser]::ParseFile($script:ScriptPath, [ref]$null, [ref]$null)
     $wanted = 'Fail', 'Get-ErrorText', 'Get-SignInHelp', 'Test-ActionAllowed', 'Format-Wrap', 'Format-Duration',
-              'Import-CsvChecked', 'Get-OutputRootWarnings', 'Assert-FileHash', 'Get-RoleInstructions', 'Test-Zip'
+              'Import-CsvChecked', 'Get-OutputRootWarnings', 'Assert-FileHash', 'Get-RoleInstructions', 'Test-Zip', 'Get-SourceStates'
     $defs = $ast.FindAll({ param($n) $n -is [System.Management.Automation.Language.FunctionDefinitionAst] -and $n.Name -in $wanted }, $true)
     foreach ($d in $defs) { . ([scriptblock]::Create($d.Extent.Text)) }
 
@@ -169,6 +169,31 @@ Describe 'Test-Zip' {
         Test-Zip $zip '*finns-inte*' | Should -BeFalse
         $bad = Join-Path $TestDrive 'bad.zip'; Set-Content $bad 'inte en zip'
         Test-Zip $bad '*' | Should -BeFalse
+    }
+}
+
+Describe 'Get-SourceStates (run-summary.json)' {
+    BeforeEach { $script:PortalSources = $null }
+    It 'delar steget Defender och kostnad i källor när steg 9 körde' {
+        $script:Status = [ordered]@{ azqr = @{ State = 'OK'; Note = '' }; 'Defender and cost' = @{ State = 'Partial'; Note = 'x' } }
+        $script:PortalSources = [ordered]@{ plans = @{ state = 'OK'; note = '' }; recommendations = @{ state = 'Partial'; note = 'list is short' }; cost = @{ state = 'OK'; note = '' } }
+        $r = Get-SourceStates
+        $r['azqr'].state | Should -Be 'OK'
+        $r['recommendations'].state | Should -Be 'Partial'
+        $r['cost'].state | Should -Be 'OK'
+        $r.Contains('Defender and cost') | Should -BeFalse
+    }
+    It 'ger alla Defender- och kostnadskällor stegets status när steg 9 hoppades över eller föll' {
+        $script:Status = [ordered]@{ 'Defender and cost' = @{ State = 'Skipped'; Note = '' } }
+        $r = Get-SourceStates
+        foreach ($k in 'plans', 'secureScore', 'secureScoreControls', 'recommendations', 'cost') { $r[$k].state | Should -Be 'Skipped' }
+        $r.Contains('azqr') | Should -BeFalse
+    }
+}
+
+Describe 'azqr körs utan maskning av prenumerations-id' {
+    It 'anropet har --mask=false' {
+        (Get-Content $script:ScriptPath -Raw -Encoding UTF8) | Should -Match 'azqr scan --mask=false --json --csv --xlsx'
     }
 }
 

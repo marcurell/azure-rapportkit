@@ -152,7 +152,7 @@ $TotalSteps = 10
 # Governance Visualizer is fetched as a fixed version (the one that was tested). Changed on purpose, not by accident.
 $GvVersion = '6.7.2'
 $GvUrl = "https://github.com/Azure/Azure-Governance-Visualizer/archive/refs/tags/$GvVersion.zip"
-$KitVersion = '1.4.1'
+$KitVersion = '1.4.2'
 
 # Tested (pinned) tool versions, and checksums (SHA256) for the zip files that are fetched directly. The customer then gets
 # the same tools that we tested, and a changed file is detected. Tools installed via winget are checked by winget
@@ -660,6 +660,20 @@ function Get-ModuleVersionText([string]$Name) {
     if ($m) { $m.Version.ToString() } else { $null }
 }
 
+# State per data source for run-summary.json, finer than the steps: Defender and cost are one step but several sources.
+# Anything that did not run is reported as the step's own state (for example Skipped).
+function Get-SourceStates {
+    $src = [ordered]@{}
+    foreach ($m in @(@('azgovviz', 'Governance Visualizer'), @('azqr', 'azqr'), @('maester', 'Maester'), @('structure', 'Structure'))) {
+        if ($Status.Contains($m[1])) { $src[$m[0]] = [ordered]@{ state = $Status[$m[1]].State; note = $Status[$m[1]].Note } }
+    }
+    if ($script:PortalSources) { foreach ($k in $script:PortalSources.Keys) { $src[$k] = $script:PortalSources[$k] } }
+    elseif ($Status.Contains('Defender and cost')) {
+        foreach ($k in 'plans', 'secureScore', 'secureScoreControls', 'recommendations', 'cost') { $src[$k] = [ordered]@{ state = $Status['Defender and cost'].State; note = $Status['Defender and cost'].Note } }
+    }
+    $src
+}
+
 # Machine-readable summary of the run (run-summary.json in the result folder): evidence of what was run, with which
 # versions, how long it took and how it went.
 function Write-RunSummary([int]$Code) {
@@ -676,6 +690,7 @@ function Write-RunSummary([int]$Code) {
         options         = [ordered]@{ hidePersonalData = [bool]$HidePersonalData; latestTools = [bool]$LatestTools; offline = [bool]$Offline; skipGovViz = [bool]$SkipGovViz; skipAzqr = [bool]$SkipAzqr; skipMaester = [bool]$SkipMaester; skipPortal = [bool]$SkipPortal; managementGroupId = $ManagementGroupId; maxPortalSubscriptions = $MaxPortalSubscriptions }
         environment     = [ordered]@{ os = [Environment]::OSVersion.VersionString; powershell = $PSVersionTable.PSVersion.ToString(); computer = $env:COMPUTERNAME }
         tools           = [ordered]@{ governanceVisualizer = $GvVersion; azqrPinned = $Pins.Azqr; azAccounts = (Get-ModuleVersionText 'Az.Accounts'); maester = (Get-ModuleVersionText 'Maester'); pester = (Get-ModuleVersionText 'Pester') }
+        sources         = Get-SourceStates
         results         = @($Status.Keys | ForEach-Object { [ordered]@{ name = $_; state = $Status[$_].State; note = $Status[$_].Note } })
         steps           = @($script:StepLog.Keys | ForEach-Object { [ordered]@{ step = [int]$_; title = $script:StepLog[$_].Title; seconds = $script:StepLog[$_].Seconds } })
         warnings        = @($Warnings)
@@ -1371,9 +1386,11 @@ try {
                 # Can azqr be started at all? Antivirus/EDR/AppLocker can block downloaded exe files without a clear error.
                 & azqr --help *> $null
                 if ($LASTEXITCODE -ne 0) { throw "azqr cannot be run (exit code $LASTEXITCODE). Is it blocked by antivirus/EDR/AppLocker? Ask IT to allow azqr.exe and run again." }
-                Write-Action 'Running: azqr scan --json --csv --xlsx'
+                Write-Action 'Running: azqr scan --mask=false --json --csv --xlsx'
                 # --json/--csv let us read the result in the HTML report; --xlsx is the full report.
-                azqr scan --json --csv --xlsx -o "azqr_$Period" 2>&1 | Out-Host
+                # --mask=false: azqr masks subscription IDs by default (xxxxxxxx-...-93b8382), which makes its findings impossible to match with the other sources
+                # (the other tools write the real IDs anyway) and unreliable as keys when runs are compared.
+                azqr scan --mask=false --json --csv --xlsx -o "azqr_$Period" 2>&1 | Out-Host
                 if ($LASTEXITCODE -ne 0) { throw "azqr ended with code $LASTEXITCODE." }
                 # Verify that the result files exist and are not empty.
                 $xlsxOut = Get-ChildItem $Dirs.azqr -Filter '*.xlsx' | Where-Object Length -gt 0 | Select-Object -First 1
@@ -1436,6 +1453,7 @@ try {
         else {
             $portalErrors = [System.Collections.Generic.List[string]]::new()
             $portalOk = 0
+            $srcFail = @{ plans = 0; secureScore = 0; secureScoreControls = 0; recommendations = 0; cost = 0 }   # failed subscriptions per source (for run-summary.json)
             try {
                 $subs = @(az account list -o json 2>$null | ConvertFrom-Json | Where-Object { $_.state -eq 'Enabled' } | Sort-Object name)
                 if ($subs.Count -gt $MaxPortalSubscriptions) {
@@ -1458,7 +1476,7 @@ try {
                         foreach ($p in @($r.value)) { $planRows.Add([pscustomobject]@{ PrenumerationId = $sid; Prenumeration = $sname; Plan = $p.name; Niva = $p.properties.pricingTier; Delplan = $p.properties.subPlan }) }
                         $portalOk++
                     }
-                    catch { $portalErrors.Add("Defender plans ($sname): $($_.Exception.Message)") }
+                    catch { $srcFail.plans++; $portalErrors.Add("Defender plans ($sname): $($_.Exception.Message)") }
 
                     # Secure Score
                     try {
@@ -1466,7 +1484,7 @@ try {
                         foreach ($sc in @($r.value)) { $scoreRows.Add([pscustomobject]@{ PrenumerationId = $sid; Prenumeration = $sname; Poang = $sc.properties.score.current; Max = $sc.properties.score.max; Andel = $sc.properties.score.percentage }) }
                         $portalOk++
                     }
-                    catch { $portalErrors.Add("Secure Score ($sname): $($_.Exception.Message)") }
+                    catch { $srcFail.secureScore++; $portalErrors.Add("Secure Score ($sname): $($_.Exception.Message)") }
 
                     # Secure Score per control (score, number of unhealthy/healthy resources). Needed because Azure's list of
                     # individual recommendations can be incomplete: the controls show how many resources are unhealthy.
@@ -1475,7 +1493,7 @@ try {
                         foreach ($c in @($r.value)) { $ctrlRows.Add([pscustomobject]@{ PrenumerationId = $sid; Prenumeration = $sname; KontrollId = $c.name; Kontroll = $c.properties.displayName; Poang = $c.properties.score.current; Max = $c.properties.score.max; Osunda = [int]$c.properties.unhealthyResourceCount; Friska = [int]$c.properties.healthyResourceCount }) }
                         $portalOk++
                     }
-                    catch { $portalErrors.Add("Secure Score controls ($sname): $($_.Exception.Message)") }
+                    catch { $srcFail.secureScoreControls++; $portalErrors.Add("Secure Score controls ($sname): $($_.Exception.Message)") }
 
                     # Defender recommendations (paged; at most 30 pages, and we stop if nextLink repeats)
                     try {
@@ -1494,7 +1512,7 @@ try {
                         }
                         $portalOk++
                     }
-                    catch { $portalErrors.Add("Defender recommendations ($sname): $($_.Exception.Message)") }
+                    catch { $srcFail.recommendations++; $portalErrors.Add("Defender recommendations ($sname): $($_.Exception.Message)") }
 
                     # Cost per month, the last 12 months (Cost Management allows at most one year)
                     try {
@@ -1515,7 +1533,7 @@ try {
                         }
                         $portalOk++
                     }
-                    catch { $portalErrors.Add("Cost ($sname): $($_.Exception.Message)") }
+                    catch { $srcFail.cost++; $portalErrors.Add("Cost ($sname): $($_.Exception.Message)") }
                 }
 
                 # Save as CSV (UTF-8 with BOM so that Excel shows å/ä/ö correctly)
@@ -1527,6 +1545,15 @@ try {
                 $ctrlUnhealthy = [int](($ctrlRows | Measure-Object -Property Osunda -Sum).Sum)
                 $recUnhealthy = @($recRows | Where-Object { $_.Status -eq 'Unhealthy' }).Count
                 if ($ctrlUnhealthy -gt $recUnhealthy) { Add-Warning "The Secure Score controls show $ctrlUnhealthy unhealthy resources, but the recommendation list contains only $recUnhealthy. Azure's list is probably incomplete; use the table Secure Score per control." }
+                # State per source, for run-summary.json: a source that failed for every subscription is Failed, for some Partial.
+                # The recommendation list is also Partial when it holds fewer unhealthy resources than the controls report.
+                $script:PortalSources = [ordered]@{}
+                foreach ($k in 'plans', 'secureScore', 'secureScoreControls', 'recommendations', 'cost') {
+                    $st = if ($srcFail[$k] -eq 0) { 'OK' } elseif ($srcFail[$k] -ge $subs.Count) { 'Failed' } else { 'Partial' }
+                    $note = if ($srcFail[$k]) { "$($srcFail[$k]) of $($subs.Count) subscriptions failed" } else { '' }
+                    if ($k -eq 'recommendations' -and $ctrlUnhealthy -gt $recUnhealthy) { if ($st -eq 'OK') { $st = 'Partial' }; $note = ($note + " The controls report $ctrlUnhealthy unhealthy resources, the list holds $recUnhealthy.").Trim() }
+                    $script:PortalSources[$k] = [ordered]@{ state = $st; note = $note }
+                }
                 if ($portalErrors.Count -eq 0) { Set-Status 'Defender and cost' 'OK' "Saved in $($Dirs.portal)" }
                 else {
                     foreach ($e in $portalErrors) { Write-Warn2 $e }
