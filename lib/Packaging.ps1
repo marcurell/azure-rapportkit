@@ -7,6 +7,9 @@
   docs\KUNDINFO.md and docs\<guide name>.docx. A document that is missing in the chosen language falls back to English.
 #>
 
+# Get-LanguageChain: a code with a region (sv-SE) uses the documents of the language (sv).
+. (Join-Path $PSScriptRoot 'Lang.ps1')
+
 # File name of the customer guide in the package, per language (other languages keep guide.<code>.docx).
 $script:GuideNames = @{ en = 'Azure-Rapportkit-Customer-guide.docx'; sv = 'Azure-Rapportkit-Kundguide.docx' }
 
@@ -22,38 +25,37 @@ function Get-ThemeLanguage([string]$ThemeFile) {
 function Set-ThemeLanguage([string]$ThemeFile, [string]$Language) {
     $json = [System.IO.File]::ReadAllText($ThemeFile, [System.Text.Encoding]::UTF8)
     if ($json -match '"language"\s*:\s*"[^"]*"') { $json = [regex]::Replace($json, '"language"\s*:\s*"[^"]*"', ('"language": "' + $Language + '"'), 1) }
+    elseif ($json -match '^\s*\{\s*\}\s*$') { $json = '{' + [Environment]::NewLine + '  "language": "' + $Language + '"' + [Environment]::NewLine + '}' }   # an empty object takes no trailing comma
     else { $json = [regex]::Replace($json, '^(\s*\{)', ('$1' + [Environment]::NewLine + '  "language": "' + $Language + '",'), 1) }
     try { [void]($json | ConvertFrom-Json) } catch { throw "theme.json became invalid when the language was set: $($_.Exception.Message)" }
     [System.IO.File]::WriteAllText($ThemeFile, $json, (New-Object System.Text.UTF8Encoding($false)))
 }
 
 # Copies README.md, docs\KUNDINFO.md and the guide into $Stage in the language $Language (default: the language in the
-# theme.json of $Stage, else English). Returns the language that was used for the README.
+# theme.json of $Stage, else English). A document that is missing in the chosen language falls back to the language without
+# region, then English. Returns the language that was used for the README.
 function Copy-CustomerDocs([string]$Root, [string]$Stage, [string]$Language) {
     if (-not $Language) { $Language = Get-ThemeLanguage (Join-Path $Stage 'branding\theme.json') }
-    if (-not $Language) { $Language = 'en' }
+    $chain = Get-LanguageChain $Language
     $pick = {
-        param($dir, $pattern, $what)
-        foreach ($code in $Language, 'en') {
+        param($dir, $pattern)
+        foreach ($code in $chain) {
             $f = Join-Path $dir ($pattern -f $code)
-            if (Test-Path -LiteralPath $f) { return $f }
+            if (Test-Path -LiteralPath $f) { return @{ File = $f; Code = $code } }
         }
         $null
     }
     $kund = Join-Path $Root 'docs\kund'
     $readme = & $pick $kund 'README.{0}.md'
     if (-not $readme) { throw "Cannot find the customer README ($kund\README.$Language.md or README.en.md)." }
-    Copy-Item -LiteralPath $readme -Destination (Join-Path $Stage 'README.md')
+    Copy-Item -LiteralPath $readme.File -Destination (Join-Path $Stage 'README.md')
     New-Item -ItemType Directory -Force (Join-Path $Stage 'docs') | Out-Null
     $info = & $pick (Join-Path $Root 'docs') 'KUNDINFO.{0}.md'
-    if ($info) { Copy-Item -LiteralPath $info -Destination (Join-Path $Stage 'docs\KUNDINFO.md') }
-    foreach ($code in $Language, 'en') {
-        $g = Join-Path $kund "guide.$code.docx"
-        if (Test-Path -LiteralPath $g) {
-            $name = if ($script:GuideNames.ContainsKey($code)) { $script:GuideNames[$code] } else { "guide.$code.docx" }
-            Copy-Item -LiteralPath $g -Destination (Join-Path $Stage "docs\$name")
-            break
-        }
+    if ($info) { Copy-Item -LiteralPath $info.File -Destination (Join-Path $Stage 'docs\KUNDINFO.md') }
+    $guide = & $pick $kund 'guide.{0}.docx'
+    if ($guide) {
+        $name = if ($script:GuideNames.ContainsKey($guide.Code)) { $script:GuideNames[$guide.Code] } else { "guide.$($guide.Code).docx" }
+        Copy-Item -LiteralPath $guide.File -Destination (Join-Path $Stage "docs\$name")
     }
-    $Language
+    $readme.Code
 }

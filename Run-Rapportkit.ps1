@@ -152,7 +152,7 @@ $TotalSteps = 10
 # Governance Visualizer is fetched as a fixed version (the one that was tested). Changed on purpose, not by accident.
 $GvVersion = '6.7.2'
 $GvUrl = "https://github.com/Azure/Azure-Governance-Visualizer/archive/refs/tags/$GvVersion.zip"
-$KitVersion = '1.4.2'
+$KitVersion = '1.4.3'
 
 # Tested (pinned) tool versions, and checksums (SHA256) for the zip files that are fetched directly. The customer then gets
 # the same tools that we tested, and a changed file is detected. Tools installed via winget are checked by winget
@@ -1386,11 +1386,14 @@ try {
                 # Can azqr be started at all? Antivirus/EDR/AppLocker can block downloaded exe files without a clear error.
                 & azqr --help *> $null
                 if ($LASTEXITCODE -ne 0) { throw "azqr cannot be run (exit code $LASTEXITCODE). Is it blocked by antivirus/EDR/AppLocker? Ask IT to allow azqr.exe and run again." }
-                Write-Action 'Running: azqr scan --mask=false --json --csv --xlsx'
-                # --json/--csv let us read the result in the HTML report; --xlsx is the full report.
                 # --mask=false: azqr masks subscription IDs by default (xxxxxxxx-...-93b8382), which makes its findings impossible to match with the other sources
-                # (the other tools write the real IDs anyway) and unreliable as keys when runs are compared.
-                azqr scan --mask=false --json --csv --xlsx -o "azqr_$Period" 2>&1 | Out-Host
+                # (the other tools write the real IDs anyway) and unreliable as keys when runs are compared. Only passed if this azqr has the option.
+                $azqrArgs = @('--json', '--csv', '--xlsx')
+                if ((& azqr scan --help 2>&1 | Out-String) -match '--mask') { $azqrArgs = @('--mask=false') + $azqrArgs }
+                else { Add-Warning 'This azqr has no --mask option, so subscription IDs in the azqr files may be masked.' }
+                Write-Action "Running: azqr scan $($azqrArgs -join ' ')"
+                # --json/--csv let us read the result in the HTML report; --xlsx is the full report.
+                azqr scan @azqrArgs -o "azqr_$Period" 2>&1 | Out-Host
                 if ($LASTEXITCODE -ne 0) { throw "azqr ended with code $LASTEXITCODE." }
                 # Verify that the result files exist and are not empty.
                 $xlsxOut = Get-ChildItem $Dirs.azqr -Filter '*.xlsx' | Where-Object Length -gt 0 | Select-Object -First 1

@@ -192,8 +192,12 @@ Describe 'Get-SourceStates (run-summary.json)' {
 }
 
 Describe 'azqr körs utan maskning av prenumerations-id' {
-    It 'anropet har --mask=false' {
-        (Get-Content $script:ScriptPath -Raw -Encoding UTF8) | Should -Match 'azqr scan --mask=false --json --csv --xlsx'
+    It 'anropet har --mask=false när azqr har flaggan' {
+        $code = Get-Content $script:ScriptPath -Raw -Encoding UTF8
+        $code | Should -Match '@\(''--mask=false''\) \+ \$azqrArgs'
+        $code | Should -Match 'azqr scan @azqrArgs'
+        $code | Should -Match "azqr scan --help"
+        $code | Should -Not -Match 'azqr scan --json'
     }
 }
 

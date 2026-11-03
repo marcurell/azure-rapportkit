@@ -233,7 +233,7 @@ th{background:var(--rk-surface-alt);color:var(--rk-muted);font-weight:600;font-s
 tr:last-child td{border-bottom:0}
 td.num,th.num{text-align:right;white-space:nowrap}
 .pill{display:inline-block;padding:1px 9px;border-radius:10px;font-size:12px;font-weight:600;color:#fff;background:var(--rk-muted)}
-.pill.high,.pill.failed,.pill.fel,.pill.saknas{background:var(--rk-high)}.pill.medium,.pill.delvis,.pill.partial{background:var(--rk-medium)}.pill.low{background:var(--rk-low)}.pill.passed,.pill.ok,.pill.klar{background:var(--rk-ok)}
+.pill.high,.pill.failed{background:var(--rk-high)}.pill.medium,.pill.partial{background:var(--rk-medium)}.pill.low{background:var(--rk-low)}.pill.passed,.pill.ok{background:var(--rk-ok)}
 .bar{height:9px;background:var(--rk-surface-alt);border-radius:5px;overflow:hidden;min-width:90px;border:1px solid var(--rk-border)}
 .bar span{display:block;height:100%;background:var(--rk-accent)}
 .rk-ext{font-size:.85em}
@@ -358,7 +358,8 @@ function New-Callout([string]$Html, [switch]$Warn) { '<div class="callout{0}">{1
 # Data: read the tool results once
 # ===========================================================================
 
-function Find-ResultFile([string]$Dir, [string]$Filter) { Get-ChildItem -LiteralPath $Dir -Filter $Filter -Recurse -ErrorAction SilentlyContinue | Select-Object -First 1 }
+# A rerun in the same folder leaves the earlier runs' files next to the new ones (AzGovViz and Maester put the time in the file name), so the newest wins.
+function Find-ResultFile([string]$Dir, [string]$Filter) { Get-ChildItem -LiteralPath $Dir -Filter $Filter -Recurse -ErrorAction SilentlyContinue | Sort-Object LastWriteTime, Name -Descending | Select-Object -First 1 }
 
 function Get-ReportData {
     $d = @{}
@@ -379,7 +380,7 @@ function Get-ReportData {
     $gvAll = @(Get-ChildItem -LiteralPath $Dirs.azgovviz -Filter 'AzGovViz*.html' -Recurse -ErrorAction SilentlyContinue)
     # The main report is called AzGovViz_<version>_<date>_<time>_<tenant ID>.html. The others (DefinitionInsights, one per subscription)
     # are page reports and can be very large, so do not just pick the first file.
-    $d.GvMain = $gvAll | Where-Object { $_.Name -match '_\d{8}_\d{6}_[0-9a-fA-F-]{36}\.html$' } | Select-Object -First 1
+    $d.GvMain = $gvAll | Where-Object { $_.Name -match '_\d{8}_\d{6}_[0-9a-fA-F-]{36}\.html$' } | Sort-Object LastWriteTime, Name -Descending | Select-Object -First 1
     if (-not $d.GvMain) { $d.GvMain = $gvAll | Sort-Object Name | Select-Object -First 1 }
     $d.GvOthers = @($gvAll | Where-Object { $d.GvMain -and $_.FullName -ne $d.GvMain.FullName })
     $d.GvPresent = [bool]$d.GvMain
@@ -398,7 +399,10 @@ function Get-ReportData {
 
     # Maester
     $d.MaesterPresent = $false
-    $mj = Get-ChildItem -LiteralPath $Dirs.maester -Filter '*.json' -Recurse -ErrorAction SilentlyContinue | Where-Object { $_.FullName -like '*test-results*' } | Select-Object -First 1
+    # maester.json is what the collector asks Maester to write; without it the newest TestResults-<time>.json is used.
+    $mFiles = @(Get-ChildItem -LiteralPath $Dirs.maester -Filter '*.json' -Recurse -ErrorAction SilentlyContinue | Where-Object { $_.FullName -like '*test-results*' })
+    $mj = $mFiles | Where-Object Name -eq 'maester.json' | Select-Object -First 1
+    if (-not $mj) { $mj = $mFiles | Sort-Object LastWriteTime, Name -Descending | Select-Object -First 1 }
     if ($mj) {
         try {
             $m = Get-Content -LiteralPath $mj.FullName -Raw | ConvertFrom-Json
@@ -409,7 +413,7 @@ function Get-ReportData {
         }
         catch { Add-Warning "maester.json could not be read: $($_.Exception.Message)" }
         # Every Maester run in the same folder leaves its own timestamped TestResults-<time>.html; the name sorts by time, so link to the newest.
-        $d.MaesterHtml = Get-ChildItem -LiteralPath $Dirs.maester -Filter '*.html' -Recurse -ErrorAction SilentlyContinue | Where-Object { $_.FullName -like '*test-results*' } | Sort-Object Name -Descending | Select-Object -First 1
+        $d.MaesterHtml = Get-ChildItem -LiteralPath $Dirs.maester -Filter '*.html' -Recurse -ErrorAction SilentlyContinue | Where-Object { $_.FullName -like '*test-results*' } | Sort-Object LastWriteTime, Name -Descending | Select-Object -First 1
     }
 
     # Defender and cost

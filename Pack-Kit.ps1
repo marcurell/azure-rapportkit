@@ -51,9 +51,8 @@ if ($Branding) {
     $leaf = Split-Path (Split-Path $brandSource -Parent) -Leaf
     if ($leaf -match '^[A-Za-z0-9_-]+$') { $suffix = "-$leaf" }
 }
-if ($Language -and -not (Test-Path -LiteralPath (Join-Path $root "lang\$Language.psd1"))) {
-    $have = @(Get-ChildItem -LiteralPath (Join-Path $root 'lang') -Filter '*.psd1' -ErrorAction SilentlyContinue | ForEach-Object { $_.BaseName }) -join ', '
-    throw "There is no language pack '$Language' in lang\ (available: $have)."
+if ($Language -and -not @(Get-LanguageChain $Language -NoFallback | Where-Object { Test-Path -LiteralPath (Join-Path $root "lang\$_.psd1") }).Count) {
+    throw "There is no language pack '$Language' in lang\ (available: $((Get-LanguageCodes $root) -join ', '))."
 }
 if (-not $Out) { $Out = Join-Path (Get-Location) "azure-rapportkit-$version$suffix.zip" }
 

@@ -233,6 +233,34 @@ Describe 'Write-ReportSite (sidbygge)' {
     }
 }
 
+Describe 'Val av resultatfiler när en mapp har flera körningar' {
+    BeforeAll {
+        $script:RunDir = Join-Path $TestDrive 'multi'
+        $script:Dirs = @{}
+        foreach ($n in 'azqr', 'azgovviz', 'maester', 'portal', 'struktur') { $script:Dirs[$n] = Join-Path $script:RunDir $n; New-Item -ItemType Directory -Force $script:Dirs[$n] | Out-Null }
+    }
+    BeforeEach { $script:Warnings.Clear() }
+    It 'Find-ResultFile tar den senaste filen, och vid samma tid den med senast namn' {
+        $d = Join-Path $TestDrive 'ff'; New-Item -ItemType Directory $d | Out-Null
+        foreach ($n in 'A_20261030_153226_x.csv', 'A_20261030_162235_x.csv', 'A_20261030_154908_x.csv') { 'x' | Set-Content (Join-Path $d $n) }
+        $t = Get-Date
+        foreach ($f in Get-ChildItem $d) { $f.LastWriteTime = $t }
+        (Find-ResultFile $d '*_x.csv').Name | Should -Be 'A_20261030_162235_x.csv'
+        (Get-Item (Join-Path $d 'A_20261030_153226_x.csv')).LastWriteTime = $t.AddMinutes(5)
+        (Find-ResultFile $d '*_x.csv').Name | Should -Be 'A_20261030_153226_x.csv'
+        Find-ResultFile (Join-Path $d 'finns-inte') '*.csv' | Should -BeNullOrEmpty
+    }
+    It 'läser maester.json om den finns, annars den senaste TestResults-filen' {
+        $mt = Join-Path $script:Dirs.maester 'test-results'; New-Item -ItemType Directory $mt | Out-Null
+        $mk = { param($name, $passed, $time) $p = Join-Path $mt $name; @{ PassedCount = $passed; FailedCount = 0; SkippedCount = 0; Tests = @() } | ConvertTo-Json | Set-Content $p -Encoding utf8; (Get-Item $p).LastWriteTime = $time }
+        & $mk 'TestResults-2026-10-30-100000.json' 1 (Get-Date).AddHours(-3)
+        & $mk 'TestResults-2026-10-30-120000.json' 2 (Get-Date).AddHours(-2)
+        (Get-ReportData).Maester.PassedCount | Should -Be 2        # no maester.json: the newest TestResults file
+        & $mk 'maester.json' 7 (Get-Date).AddHours(-4)
+        (Get-ReportData).Maester.PassedCount | Should -Be 7        # maester.json is what the collector asked for
+    }
+}
+
 Describe 'Mörk logga och bakgrund' {
     BeforeEach { $script:Warnings.Clear() }
     It 'bäddar in en separat logga för mörkt läge' {
