@@ -189,6 +189,20 @@ Describe 'Write-ReportSite (sidbygge)' {
             Test-Path (Join-Path $script:RunDir $f) | Should -BeTrue
         }
     }
+    It 'visar vilka resultatfiler rapporten byggdes av, utan användarens mappnamn' {
+        $h = Get-PageText 'rapport-om.html'
+        $h | Should -Match 'Resultatfiler som användes'
+        $h | Should -Match 'azqr\\azqr_x\.impacted\.csv'
+        $h | Should -Match 'maester\\test-results\\maester\.json'
+        $h | Should -Match 'maester\\test-results\\TestResults-2026-10-30-162523\.html'
+        $h | Should -Not -Match ([regex]::Escape($TestDrive))
+        $h | Should -Not -Match 'tidigare körningar'      # one run of each tool: nothing older to mention
+    }
+    It 'visar rapportmallen utan sökväg' {
+        $h = Get-PageText 'rapport-om.html'
+        $h | Should -Match 'Moln på svenska'
+        $h | Should -Not -Match 'branding'
+    }
     It 'har samma navigering och temat på varje sida' {
         foreach ($f in Get-ChildItem $script:RunDir -Filter 'rapport*.html') {
             $h = Get-Content $f.FullName -Raw
@@ -258,6 +272,21 @@ Describe 'Val av resultatfiler när en mapp har flera körningar' {
         & $mk 'TestResults-2026-10-30-100000.json' 1 (Get-Date).AddHours(-3)
         & $mk 'TestResults-2026-10-30-120000.json' 2 (Get-Date).AddHours(-2)
         (Get-ReportData).Maester.PassedCount | Should -Be 2        # the newest TestResults file wins over maester.json
+    }
+    It 'listar de filer som användes och räknar de äldre körningarna' {
+        $guid = '11111111-2222-3333-4444-555555555555'
+        foreach ($t in '20261030_100000', '20261031_100000') { '<html></html>' | Set-Content (Join-Path $script:Dirs.azgovviz "AzGovViz_6.7.2_${t}_$guid.html") -Encoding utf8 }
+        $mt = Join-Path $script:Dirs.maester 'test-results'
+        foreach ($t in '2026-10-30-100000', '2026-10-30-120000') { '<html></html>' | Set-Content (Join-Path $mt "TestResults-$t.html") -Encoding utf8 }
+        $d = Get-ReportData
+        $files = @($d.Used | ForEach-Object File)
+        $files | Should -Contain "azgovviz\AzGovViz_6.7.2_20261031_100000_$guid.html"
+        $files | Should -Not -Contain "azgovviz\AzGovViz_6.7.2_20261030_100000_$guid.html"
+        $files | Should -Contain 'maester\test-results\TestResults-2026-10-30-120000.json'
+        $files | Should -Contain 'maester\test-results\TestResults-2026-10-30-120000.html'
+        $d.OlderGvRuns | Should -Be 1
+        $d.OlderMaesterRuns | Should -Be 1
+        ($d.Used | Where-Object Tool -eq 'Maester').Modified | Should -Match '^\d{4}-\d{2}-\d{2} \d{2}:\d{2}$'
     }
 }
 

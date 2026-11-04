@@ -361,12 +361,29 @@ function New-Callout([string]$Html, [switch]$Warn) { '<div class="callout{0}">{1
 # A rerun in the same folder leaves the earlier runs' files next to the new ones (AzGovViz and Maester put the time in the file name), so the newest wins.
 function Find-ResultFile([string]$Dir, [string]$Filter) { Get-ChildItem -LiteralPath $Dir -Filter $Filter -Recurse -ErrorAction SilentlyContinue | Sort-Object LastWriteTime, Name -Descending | Select-Object -First 1 }
 
+# Path of a result file relative to the result folder (so that the report does not carry the user's folder names).
+function Get-RelativeResultPath($File) {
+    $full = [string]$File.FullName
+    if ($RunDir -and $full.StartsWith([string]$RunDir, [System.StringComparison]::OrdinalIgnoreCase)) { return $full.Substring(([string]$RunDir).TrimEnd('\').Length).TrimStart('\') }
+    $File.Name
+}
+
+# How many runs of a tool (distinct time stamps in the file names) the folder holds besides the newest one.
+function Get-OlderRunCount([string]$Dir, [string]$Filter, [string]$Pattern) {
+    $stamps = @(Get-ChildItem -LiteralPath $Dir -Filter $Filter -Recurse -ErrorAction SilentlyContinue | ForEach-Object { if ($_.FullName -match $Pattern) { $Matches[1] } } | Select-Object -Unique)
+    [math]::Max(0, $stamps.Count - 1)
+}
+
 function Get-ReportData {
     $d = @{}
+    # The result files the report is built from (shown on the page About the run): @{ Tool; File; Modified }.
+    $used = [System.Collections.Generic.List[object]]::new()
+    $addUsed = { param($tool, $f) if ($f) { $used.Add([pscustomobject]@{ Tool = $tool; File = (Get-RelativeResultPath $f); Modified = $f.LastWriteTime.ToString('yyyy-MM-dd HH:mm') }) } }
 
     # azqr
     $imp = Find-ResultFile $Dirs.azqr '*.impacted.csv'
     $d.AzqrPresent = [bool]$imp
+    & $addUsed 'azqr' $imp
     if ($imp) {
         $d.AzqrImp = Import-CsvChecked $imp.FullName @('Impact', 'Category', 'Recommendation', 'Resource Name')
         $f = Find-ResultFile $Dirs.azqr '*.inventory.csv'
@@ -384,6 +401,8 @@ function Get-ReportData {
     if (-not $d.GvMain) { $d.GvMain = $gvAll | Sort-Object Name | Select-Object -First 1 }
     $d.GvOthers = @($gvAll | Where-Object { $d.GvMain -and $_.FullName -ne $d.GvMain.FullName })
     $d.GvPresent = [bool]$d.GvMain
+    & $addUsed 'Governance Visualizer' $d.GvMain
+    $d.OlderGvRuns = Get-OlderRunCount $Dirs.azgovviz 'AzGovViz*.html' '_(\d{8}_\d{6})_[0-9a-fA-F-]{36}\.html$'
     if ($d.GvPresent) {
         $get = { param($suffix, $req) $f = Find-ResultFile $Dirs.azgovviz "*_$suffix.csv"; if ($f) { Import-CsvChecked $f.FullName $req ';' } else { $null } }
         $d.GvRoles = Get-UniqueRows (& $get 'RoleAssignments' @('RoleClear', 'ObjectType', 'ScopeTenOrMgOrSubOrRGOrRes')) 'RoleAssignmentId'
@@ -404,6 +423,8 @@ function Get-ReportData {
     $mFiles = @(Get-ChildItem -LiteralPath $Dirs.maester -Filter '*.json' -Recurse -ErrorAction SilentlyContinue | Where-Object { $_.FullName -like '*test-results*' })
     $mj = $mFiles | Where-Object Name -like 'TestResults-*.json' | Sort-Object Name -Descending | Select-Object -First 1
     if (-not $mj) { $mj = $mFiles | Where-Object Name -eq 'maester.json' | Select-Object -First 1 }
+    & $addUsed 'Maester' $mj
+    $d.OlderMaesterRuns = Get-OlderRunCount $Dirs.maester 'TestResults-*.json' 'TestResults-(\d{4}-\d{2}-\d{2}-\d{6})\.json$'
     if ($mj) {
         try {
             $m = Get-Content -LiteralPath $mj.FullName -Raw | ConvertFrom-Json
@@ -414,7 +435,8 @@ function Get-ReportData {
         }
         catch { Add-Warning "maester.json could not be read: $($_.Exception.Message)" }
         # Every Maester run in the same folder leaves its own timestamped TestResults-<time>.html; the name sorts by time, so link to the newest.
-        $d.MaesterHtml = Get-ChildItem -LiteralPath $Dirs.maester -Filter '*.html' -Recurse -ErrorAction SilentlyContinue | Where-Object { $_.FullName -like '*test-results*' } | Sort-Object LastWriteTime, Name -Descending | Select-Object -First 1
+        $d.MaesterHtml = Get-ChildItem -LiteralPath $Dirs.maester -Filter '*.html' -Recurse -ErrorAction SilentlyContinue | Where-Object { $_.FullName -like '*test-results*' } | Sort-Object Name -Descending | Select-Object -First 1
+        & $addUsed 'Maester (HTML)' $d.MaesterHtml
     }
 
     # Defender and cost
@@ -428,6 +450,7 @@ function Get-ReportData {
 
     # Structure: management groups and networks (lib\StructurePage.ps1)
     Read-StructureData $d
+    $d.Used = @($used)
     $d
 }
 
@@ -684,10 +707,19 @@ function Get-AboutPageHtml($d, $Theme) {
         [pscustomobject]@{ Falt = (T 'about.toolVersions'); Varde = $toolVersions },
         [pscustomobject]@{ Falt = (T 'about.installed'); Varde = ('Maester {0}, Az.Accounts {1}' -f (Get-ModuleVersionText 'Maester'), (Get-ModuleVersionText 'Az.Accounts')) },
         [pscustomobject]@{ Falt = (T 'about.computer'); Varde = ('PowerShell {0}, {1}' -f $PSVersionTable.PSVersion, [Environment]::OSVersion.VersionString) },
-        [pscustomobject]@{ Falt = (T 'about.theme'); Varde = ('{0} ({1})' -f $Theme.Data.name, $Theme.Source) }
+        [pscustomobject]@{ Falt = (T 'about.theme'); Varde = $(if ($Theme.Source -eq 'built-in default') { T 'about.themeBuiltIn' $Theme.Data.name } else { [string]$Theme.Data.name }) }
     )
     [void]$sb.Append('<h2>' + (Esc (T 'about.heading')) + '</h2>' + (ConvertTo-HtmlTable $meta @(@{Name='Falt';Label=(T 'col.field')}, @{Name='Varde';Label=(T 'col.value')}) 20))
     [void]$sb.Append((New-Callout (Esc (T 'about.readOnly'))))
+
+    # Which result files the report was built from: a rerun in the same folder leaves the earlier runs next to the new one, and the
+    # newest is used. The names and times let the reader see that it is the run that was meant.
+    if (@($d.Used).Count) {
+        [void]$sb.Append('<h2>' + (Esc (T 'about.used')) + '</h2><p class="muted">' + (Esc (T 'about.usedLead')) + '</p>')
+        [void]$sb.Append((ConvertTo-HtmlTable $d.Used @(@{Name='Tool';Label=(T 'col.tool')}, @{Name='File';Label=(T 'col.file')}, @{Name='Modified';Label=(T 'col.modified')}) 20))
+        $older = [int]$d.OlderGvRuns + [int]$d.OlderMaesterRuns
+        if ($older -gt 0) { [void]$sb.Append('<p class="muted">' + (Esc (T 'about.usedOlder' ([int]$d.OlderGvRuns) ([int]$d.OlderMaesterRuns))) + '</p>') }
+    }
 
     [void]$sb.Append('<h2>' + (Esc (T 'about.files')) + '</h2>' + (T 'about.files.html'))
     $sb.ToString()

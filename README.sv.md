@@ -23,10 +23,10 @@ Scriptet **skriver inget i Azure-resurser eller i Entra-konfigurationen**. Det g
 $dest = Join-Path $env:USERPROFILE 'rapportkit-kit'
 $zip  = Join-Path $env:TEMP 'azure-rapportkit.zip'
 New-Item -ItemType Directory -Force $dest | Out-Null
-Invoke-WebRequest 'https://github.com/marcurell/azure-rapportkit/archive/refs/tags/v1.4.4.zip' -OutFile $zip
+Invoke-WebRequest 'https://github.com/marcurell/azure-rapportkit/archive/refs/tags/v1.4.5.zip' -OutFile $zip
 Expand-Archive $zip $dest -Force
 Get-ChildItem $dest -Recurse | Unblock-File
-$script = Join-Path $dest 'azure-rapportkit-1.4.4\Run-Rapportkit.ps1'
+$script = Join-Path $dest 'azure-rapportkit-1.4.5\Run-Rapportkit.ps1'
 $arg = '-NoExit -ExecutionPolicy Bypass -File "' + $script + '"'
 Start-Process powershell -ArgumentList $arg
 ```
@@ -92,7 +92,7 @@ Allt hamnar i `<resultatmapp>\<år-månad>\`:
 | `rapportkit-console.log` | Hela konsolutskriften inklusive verktygens text (felsökning; tas inte med i zippen) |
 | `run-summary.json` | Maskinläsbar sammanfattning: versioner, tid per steg, status, varningar, slutkod |
 
-Utanför mappen: `rapportkit_<tenant>_<år-månad>.zip.rkenc` med en `.sha256`-fil, så att mottagaren kan kontrollera att filen kommit fram oförändrad (stäng av med `-NoZip`). Kryptering är **valfri**: scriptet frågar i början om paketet ska krypteras, och svarar du ja är filen **lösenordskrypterad** (AES-256) med ett lösenord du anger (minst 12 tecken, bekräftas två gånger). Svarar du nej (eller använder `-NoEncrypt`) blir det en vanlig `.zip`. Den som kör skickar filen och lösenordet på **olika vägar** (till exempel filen via e-post och lösenordet via SMS). Mottagaren packar upp med `Unprotect-Rapportkit.ps1` (se nedan). Mappen med okrypterade resultat ligger kvar på kundens dator och bör tas bort när uppdraget är klart. `-NoEncrypt` ger en vanlig zip (bara om resultatet inte lämnar datorn).
+Utanför mappen: `rapportkit_<tenant>_<år-månad>.zip.rkenc` med en `.sha256`-fil, så att mottagaren kan kontrollera att filen kommit fram oförändrad (stäng av med `-NoZip`). Zippen innehåller den senaste körningen av varje verktyg, inte Maesters testsvit; tidigare körningar i samma mapp finns kvar på disken. Kryptering är **valfri**: scriptet frågar i början om paketet ska krypteras, och svarar du ja är filen **lösenordskrypterad** (AES-256) med ett lösenord du anger (minst 12 tecken, bekräftas två gånger). Svarar du nej (eller använder `-NoEncrypt`) blir det en vanlig `.zip`. Den som kör skickar filen och lösenordet på **olika vägar** (till exempel filen via e-post och lösenordet via SMS). Mottagaren packar upp med `Unprotect-Rapportkit.ps1` (se nedan). Mappen med okrypterade resultat ligger kvar på kundens dator och bör tas bort när uppdraget är klart. `-NoEncrypt` ger en vanlig zip (bara om resultatet inte lämnar datorn).
 
 ### Packa upp ett krypterat paket
 

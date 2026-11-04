@@ -10,7 +10,8 @@ BeforeAll {
     $script:ScriptPath = Join-Path $PSScriptRoot '..\Run-Rapportkit.ps1'
     $ast = [System.Management.Automation.Language.Parser]::ParseFile($script:ScriptPath, [ref]$null, [ref]$null)
     $wanted = 'Fail', 'Get-ErrorText', 'Get-SignInHelp', 'Test-ActionAllowed', 'Format-Wrap', 'Format-Duration',
-              'Import-CsvChecked', 'Get-OutputRootWarnings', 'Assert-FileHash', 'Get-RoleInstructions', 'Test-Zip', 'Get-SourceStates'
+              'Import-CsvChecked', 'Get-OutputRootWarnings', 'Assert-FileHash', 'Get-RoleInstructions', 'Test-Zip', 'Get-SourceStates',
+              'Get-GraphThrottleGiveUps', 'Get-ZipFiles', 'New-ResultZip'
     $defs = $ast.FindAll({ param($n) $n -is [System.Management.Automation.Language.FunctionDefinitionAst] -and $n.Name -in $wanted }, $true)
     foreach ($d in $defs) { . ([scriptblock]::Create($d.Extent.Text)) }
 
@@ -188,6 +189,115 @@ Describe 'Get-SourceStates (run-summary.json)' {
         $r = Get-SourceStates
         foreach ($k in 'plans', 'secureScore', 'secureScoreControls', 'recommendations', 'cost') { $r[$k].state | Should -Be 'Skipped' }
         $r.Contains('azqr') | Should -BeFalse
+    }
+}
+
+Describe 'Get-GraphThrottleGiveUps' {
+    BeforeAll {
+        # How Graph throttling looks in the console log: the same failure is logged once per layer.
+        $script:Fail = 'PS>TerminatingError(Invoke-MgGraphRequest): "Too many retries performed. More than 3 retries encountered while sending the request."' + "`n" +
+                       '>> TerminatingError(Invoke-MtGraphRequestCache): "Too many retries performed."' + "`n" +
+                       '>> TerminatingError(Invoke-MtGraphRequestCache): "Too many retries performed."' + "`n"
+        $script:Retry = '{"error":{"code":"TooManyRequests","message":"Too many requests. Please retry."}}' + "`n"
+    }
+    It 'räknar varje misslyckat anrop en gång, inte en gång per loggat lager' {
+        $log = Join-Path $TestDrive 'c1.log'
+        Set-Content $log ($script:Fail * 3) -NoNewline
+        Get-GraphThrottleGiveUps $log | Should -Be 3
+    }
+    It 'räknar bara från där steget började (loggen får text från tidigare körningar)' {
+        $log = Join-Path $TestDrive 'c2.log'
+        Set-Content $log ($script:Fail * 5) -NoNewline
+        $from = (Get-Item $log).Length
+        Add-Content $log ($script:Fail * 2) -NoNewline
+        Get-GraphThrottleGiveUps $log $from | Should -Be 2
+        Get-GraphThrottleGiveUps $log 0 | Should -Be 7
+    }
+    It 'ger 0 när anropen bara fick försöka igen, eller när loggen saknas' {
+        $log = Join-Path $TestDrive 'c3.log'
+        Set-Content $log ($script:Retry * 20) -NoNewline
+        Get-GraphThrottleGiveUps $log | Should -Be 0
+        Get-GraphThrottleGiveUps (Join-Path $TestDrive 'finns-inte.log') | Should -Be 0
+    }
+    It 'läser en logg som skripten fortfarande skriver i' {
+        $log = Join-Path $TestDrive 'c4.log'
+        $w = [System.IO.File]::Open($log, 'Create', 'Write', 'Read')
+        try {
+            $bytes = [System.Text.Encoding]::UTF8.GetBytes($script:Fail); $w.Write($bytes, 0, $bytes.Length); $w.Flush()
+            Get-GraphThrottleGiveUps $log | Should -Be 1
+        }
+        finally { $w.Dispose() }
+    }
+    It 'sätter Maester till Partial och varnar när något gav upp' {
+        $code = Get-Content $script:ScriptPath -Raw -Encoding UTF8
+        $code | Should -Match 'Set-Status ''Maester'' ''Partial'' \$note'
+        $code | Should -Match 'Get-GraphThrottleGiveUps \$consoleLog \$consoleFrom'
+    }
+}
+
+Describe 'Zip av resultatmappen' {
+    BeforeAll {
+        $script:Run = Join-Path $TestDrive 'run'
+        $files = @(
+            'rapportkit.log', 'rapportkit-console.log', 'run-summary.json', 'rapport.html',
+            'azqr/azqr_2026-11.json',
+            'portal/kostnad.csv',
+            'maester/maester-tests/ad/computer/Test-One.Tests.ps1', 'maester/maester-tests/maester-config.json',
+            'maester/test-results/maester.json',
+            'maester/test-results/TestResults-2026-11-02-084920.json', 'maester/test-results/TestResults-2026-11-02-084920.html', 'maester/test-results/TestResults-2026-11-02-084920-summary.md',
+            'maester/test-results/TestResults-2026-11-03-135205.json', 'maester/test-results/TestResults-2026-11-03-135205.html', 'maester/test-results/TestResults-2026-11-03-135205-summary.md',
+            'azgovviz/AzGovViz_6.7.2_20261102_084514_g_Roles.csv',
+            'azgovviz/AzGovViz_6.7.2_20261103_114034_g_Roles.csv',
+            'azgovviz/AzGovViz_6.7.2_20261103_114034_g.html',
+            'azgovviz/HTML-Subscriptions_g_20261102_084514/s1.html',
+            'azgovviz/HTML-Subscriptions_g_20261103_114034/s1.html',
+            'azgovviz/JSON_g_20261102_084514/a.json',
+            'azgovviz/JSON_g_20261103_114034/a.json')
+        foreach ($f in $files) {
+            $p = Join-Path $script:Run $f; New-Item -ItemType Directory -Force (Split-Path $p) | Out-Null
+            Set-Content $p "innehåll $f" -Encoding utf8
+        }
+        $script:Entries = @(Get-ZipFiles $script:Run | ForEach-Object { $_.Entry })
+    }
+    It 'tar med den senaste körningen av AzGovViz och Maester och lämnar de äldre' {
+        $script:Entries | Should -Contain 'azgovviz/AzGovViz_6.7.2_20261103_114034_g_Roles.csv'
+        $script:Entries | Should -Contain 'azgovviz/AzGovViz_6.7.2_20261103_114034_g.html'
+        $script:Entries | Should -Contain 'azgovviz/HTML-Subscriptions_g_20261103_114034/s1.html'
+        $script:Entries | Should -Contain 'azgovviz/JSON_g_20261103_114034/a.json'
+        $script:Entries | Should -Contain 'maester/test-results/TestResults-2026-11-03-135205.json'
+        $script:Entries | Should -Contain 'maester/test-results/TestResults-2026-11-03-135205-summary.md'
+        @($script:Entries | Where-Object { $_ -like '*20261102*' -or $_ -like '*2026-11-02-*' }).Count | Should -Be 0
+    }
+    It 'tar med resten, men inte konsolloggen eller Maesters testsvit' {
+        foreach ($e in 'rapportkit.log', 'run-summary.json', 'rapport.html', 'azqr/azqr_2026-11.json', 'portal/kostnad.csv', 'maester/test-results/maester.json') { $script:Entries | Should -Contain $e }
+        $script:Entries | Should -Not -Contain 'rapportkit-console.log'
+        @($script:Entries | Where-Object { $_ -like 'maester/maester-tests/*' }).Count | Should -Be 0
+    }
+    It 'New-ResultZip skriver en zip med snedstreck i namnen och orört innehåll' {
+        $zip = Join-Path $TestDrive 'out.zip'
+        New-ResultZip $script:Run $zip
+        Test-Zip $zip '*rapport.html' | Should -BeTrue
+        Add-Type -AssemblyName System.IO.Compression.FileSystem
+        $z = [System.IO.Compression.ZipFile]::OpenRead($zip)
+        try {
+            $names = @($z.Entries | ForEach-Object FullName)
+            $names.Count | Should -Be $script:Entries.Count
+            @($names | Where-Object { $_ -match '\\' }).Count | Should -Be 0
+            $e = $z.GetEntry('azqr/azqr_2026-11.json')
+            $r = New-Object System.IO.StreamReader($e.Open(), [System.Text.Encoding]::UTF8); $txt = $r.ReadToEnd(); $r.Dispose()
+            $txt.Trim() | Should -Be 'innehåll azqr/azqr_2026-11.json'
+        }
+        finally { $z.Dispose() }
+    }
+    It 'läser en fil som något annat håller öppen för skrivning' {
+        $busy = Join-Path $script:Run 'rapportkit.log'
+        $h = [System.IO.File]::Open($busy, 'Open', 'Write', 'ReadWrite')
+        try {
+            $zip = Join-Path $TestDrive 'busy.zip'
+            { New-ResultZip $script:Run $zip } | Should -Not -Throw
+            Test-Zip $zip 'rapportkit.log' | Should -BeTrue
+        }
+        finally { $h.Dispose() }
     }
 }
 

@@ -152,7 +152,7 @@ $TotalSteps = 10
 # Governance Visualizer is fetched as a fixed version (the one that was tested). Changed on purpose, not by accident.
 $GvVersion = '6.7.2'
 $GvUrl = "https://github.com/Azure/Azure-Governance-Visualizer/archive/refs/tags/$GvVersion.zip"
-$KitVersion = '1.4.4'
+$KitVersion = '1.4.5'
 
 # Tested (pinned) tool versions, and checksums (SHA256) for the zip files that are fetched directly. The customer then gets
 # the same tools that we tested, and a changed file is detected. Tools installed via winget are checked by winget
@@ -696,6 +696,67 @@ function Write-RunSummary([int]$Code) {
         warnings        = @($Warnings)
     }
     try { $obj | ConvertTo-Json -Depth 6 | Set-Content -Path (Join-Path $RunDir 'run-summary.json') -Encoding utf8 } catch { }
+}
+
+# How many Microsoft Graph requests gave up after retries ("Too many retries") in the console log, counted from byte $FromByte on
+# (the log is appended to by every run in the same folder). Graph throttling does not only slow Maester down: tests end as Error and
+# some change result, so a run with give-ups is marked Partial. Reads the log while it is open for writing; never fails (0 = nothing found).
+function Get-GraphThrottleGiveUps([string]$LogPath, [long]$FromByte = 0) {
+    try {
+        $fs = [System.IO.File]::Open($LogPath, [System.IO.FileMode]::Open, [System.IO.FileAccess]::Read, [System.IO.FileShare]::ReadWrite)
+        try {
+            if ($FromByte -lt 0 -or $FromByte -gt $fs.Length) { $FromByte = 0 }
+            [void]$fs.Seek($FromByte, [System.IO.SeekOrigin]::Begin)
+            # Latin-1 maps every byte to a character, so the (ASCII) message is found whatever encoding the log has.
+            $text = (New-Object System.IO.StreamReader($fs, [System.Text.Encoding]::GetEncoding(28591))).ReadToEnd()
+        }
+        finally { $fs.Dispose() }
+        # The same failure is logged once per layer (Invoke-MgGraphRequest, then Maester's cache); count the first layer only.
+        $n = [regex]::Matches($text, 'TerminatingError\(Invoke-MgGraphRequest\)[^\r\n]{0,40}Too many retries').Count
+        if (-not $n) { $n = [regex]::Matches($text, 'Too many retries').Count }
+        return [int]$n
+    }
+    catch { return 0 }
+}
+
+# The files of the result folder that go into the delivery zip. Left out: the console log (a troubleshooting log, locked while the script
+# runs), Maester's test suite (fetched again when needed: hundreds of small files) and the earlier runs that a rerun in the same month
+# leaves behind. AzGovViz and Maester put the time in the file names, so only the newest set of each is kept: otherwise the zip grows
+# with every rerun. The earlier runs stay in the folder on the disk. Gives @{ File; Entry } (full path and path inside the zip).
+function Get-ZipFiles([string]$Root) {
+    $rootFull = (Resolve-Path -LiteralPath $Root).ProviderPath.TrimEnd('\')
+    $rows = foreach ($f in @(Get-ChildItem -LiteralPath $rootFull -Recurse -File -Force -ErrorAction SilentlyContinue)) {
+        $rel = $f.FullName.Substring($rootFull.Length + 1).Replace('\', '/')
+        if ($rel -eq 'rapportkit-console.log') { continue }
+        if ($rel -like 'maester/maester-tests/*') { continue }
+        $stamp = ''
+        if ($rel -like 'azgovviz/*' -and $rel -match '_(\d{8}_\d{6})(?:_|\.|/)') { $stamp = $Matches[1] }
+        elseif ($rel -like 'maester/test-results/TestResults-*' -and $rel -match 'TestResults-(\d{4}-\d{2}-\d{2}-\d{6})') { $stamp = $Matches[1] }
+        [pscustomobject]@{ File = $f.FullName; Entry = $rel; Group = $(if ($stamp) { ($rel -split '/')[0] } else { '' }); Stamp = $stamp }
+    }
+    $newest = @{}
+    foreach ($g in @($rows | Where-Object Stamp | Group-Object Group)) { $newest[$g.Name] = ($g.Group | Sort-Object Stamp -Descending | Select-Object -First 1).Stamp }
+    @($rows | Where-Object { -not $_.Stamp -or $_.Stamp -eq $newest[$_.Group] } | ForEach-Object { @{ File = $_.File; Entry = $_.Entry } })
+}
+
+# Zips the files from Get-ZipFiles with forward slashes in the entry names (Compress-Archive in Windows PowerShell 5.1 writes backslashes),
+# and without holding the whole content in memory. A file that is open for writing by someone else is read anyway.
+function New-ResultZip([string]$SourceDir, [string]$DestinationPath) {
+    Add-Type -AssemblyName System.IO.Compression, System.IO.Compression.FileSystem
+    $zip = [System.IO.Compression.ZipFile]::Open($DestinationPath, [System.IO.Compression.ZipArchiveMode]::Create)
+    try {
+        foreach ($item in @(Get-ZipFiles $SourceDir)) {
+            $entry = $zip.CreateEntry($item.Entry, [System.IO.Compression.CompressionLevel]::Optimal)
+            try { $entry.LastWriteTime = (Get-Item -LiteralPath $item.File).LastWriteTime } catch { }
+            $out = $entry.Open()
+            try {
+                $in = [System.IO.File]::Open($item.File, [System.IO.FileMode]::Open, [System.IO.FileAccess]::Read, [System.IO.FileShare]::ReadWrite)
+                try { $in.CopyTo($out) } finally { $in.Dispose() }
+            }
+            finally { $out.Dispose() }
+        }
+    }
+    finally { $zip.Dispose() }
 }
 
 # Is the file a complete zip that contains (at least) one entry that matches $MustContain?
@@ -1409,7 +1470,7 @@ try {
         # ===================================================================
         # STEP 8: Maester
         # ===================================================================
-        Write-Step 8 'Maester (Entra ID tests)' 'Optional. 10-20 min.'
+        Write-Step 8 'Maester (Entra ID tests)' 'Optional. Usually 3-20 min, but over an hour in a large tenant when Microsoft Graph limits the requests.'
         if ($SkipMaester) { Write-Action 'Skipped'; Set-SkippedUnlessFailed 'Maester' }
         else {
             try {
@@ -1426,6 +1487,8 @@ try {
                 # A maester.json from an earlier run in the same folder would otherwise pass for this run's result.
                 Remove-Item -LiteralPath $mtJson -Force -ErrorAction SilentlyContinue
                 $mtStarted = Get-Date
+                $consoleLog = Join-Path $RunDir 'rapportkit-console.log'
+                $consoleFrom = if (Test-Path -LiteralPath $consoleLog) { (Get-Item -LiteralPath $consoleLog).Length } else { 0 }
                 $res = Invoke-Maester -Path $testsDir -OutputFolder $mtOut -OutputJsonFile $mtJson -NonInteractive -PassThru | Select-Object -Last 1
                 $mtFresh = @(Get-ChildItem -LiteralPath $mtOut -Filter 'TestResults-*.json' -ErrorAction SilentlyContinue | Where-Object LastWriteTime -ge $mtStarted)
                 if (-not (Test-Path $mtJson) -and -not $mtFresh) {
@@ -1443,7 +1506,13 @@ try {
                         throw "Maester finished but maester.json is missing. Files in the maester folder: $found. Is Windows Defender (Controlled folder access) blocking writing? See troubleshooting in the README."
                     }
                 }
-                Set-Status 'Maester' 'OK'
+                $giveUps = Get-GraphThrottleGiveUps $consoleLog $consoleFrom
+                if ($giveUps) {
+                    $note = "Microsoft Graph limited the requests and $giveUps of them gave up after retries. Some Entra results can be missing or wrong. Run again, preferably at another time."
+                    Add-Warning "Maester: $note"
+                    Set-Status 'Maester' 'Partial' $note
+                }
+                else { Set-Status 'Maester' 'OK' }
                 Write-Ok 'Maester done'
             }
             catch { Write-Warn2 $_.Exception.Message; Set-Status 'Maester' 'Failed' $_.Exception.Message }
@@ -1561,7 +1630,7 @@ try {
                     if ($k -eq 'recommendations' -and $ctrlUnhealthy -gt $recUnhealthy) { if ($st -eq 'OK') { $st = 'Partial' }; $note = ($note + " The controls report $ctrlUnhealthy unhealthy resources, the list holds $recUnhealthy.").Trim() }
                     $script:PortalSources[$k] = [ordered]@{ state = $st; note = $note }
                 }
-                if ($portalErrors.Count -eq 0) { Set-Status 'Defender and cost' 'OK' "Saved in $($Dirs.portal)" }
+                if ($portalErrors.Count -eq 0) { Set-Status 'Defender and cost' 'OK' 'Saved in portal\' }
                 else {
                     foreach ($e in $portalErrors) { Write-Warn2 $e }
                     $hint = if ($portalErrors -match 'AuthorizationFailed|Forbidden|does not have authorization|403') { ' Common cause: a role is missing (Reader, Security Reader or Cost Management Reader), see the README.' } else { '' }
@@ -1608,7 +1677,7 @@ try {
     Write-RunSummary $ExitCode
 
     # Zip of the result folder for delivery, with SHA256 so that the recipient can check that the file arrived unchanged.
-    # The console log (rapportkit-console.log) is not included: it is a troubleshooting log and is locked while the script runs.
+    # Only the newest run of the tools goes into the zip, and not the console log or Maester's test suite (see Get-ZipFiles).
     $zipPath = $null; $zipHash = $null
     if (-not $NoZip) {
         try {
@@ -1620,7 +1689,7 @@ try {
                 $plainZip = Join-Path ([System.IO.Path]::GetTempPath()) ('rapportkit-' + [guid]::NewGuid().ToString('N') + '.zip')
                 $checkZip = "$plainZip.check"
                 try {
-                    Get-ChildItem -Path $RunDir -Force | Where-Object { $_.Name -ne 'rapportkit-console.log' } | Compress-Archive -DestinationPath $plainZip -Force
+                    New-ResultZip $RunDir $plainZip
                     Write-Action 'Encrypting the zip file (AES-256)'
                     Protect-RapportkitFile -Path $plainZip -Destination $zipPath -Password $ZipPassword
                     Unprotect-RapportkitFile -Path $zipPath -Destination $checkZip -Password $ZipPassword
@@ -1631,7 +1700,7 @@ try {
             }
             else {
                 Add-Warning 'The zip file is NOT encrypted (-NoEncrypt). Do not send it by e-mail.'
-                Get-ChildItem -Path $RunDir -Force | Where-Object { $_.Name -ne 'rapportkit-console.log' } | Compress-Archive -DestinationPath $zipPath -Force
+                New-ResultZip $RunDir $zipPath
             }
             $zipHash = (Get-FileHash $zipPath -Algorithm SHA256).Hash
             Set-Content -Path "$zipPath.sha256" -Value ('{0} *{1}' -f $zipHash, (Split-Path $zipPath -Leaf)) -Encoding ascii

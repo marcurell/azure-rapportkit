@@ -23,10 +23,10 @@ Open PowerShell or PowerShell ISE and paste the block below. It downloads the co
 $dest = Join-Path $env:USERPROFILE 'rapportkit-kit'
 $zip  = Join-Path $env:TEMP 'azure-rapportkit.zip'
 New-Item -ItemType Directory -Force $dest | Out-Null
-Invoke-WebRequest 'https://github.com/marcurell/azure-rapportkit/archive/refs/tags/v1.4.4.zip' -OutFile $zip
+Invoke-WebRequest 'https://github.com/marcurell/azure-rapportkit/archive/refs/tags/v1.4.5.zip' -OutFile $zip
 Expand-Archive $zip $dest -Force
 Get-ChildItem $dest -Recurse | Unblock-File
-$script = Join-Path $dest 'azure-rapportkit-1.4.4\Run-Rapportkit.ps1'
+$script = Join-Path $dest 'azure-rapportkit-1.4.5\Run-Rapportkit.ps1'
 $arg = '-NoExit -ExecutionPolicy Bypass -File "' + $script + '"'
 Start-Process powershell -ArgumentList $arg
 ```
@@ -94,7 +94,7 @@ Everything ends up in `<result folder>\<year-month>\`:
 
 (The CSV files keep Swedish column names and file names: they are a data format shared with older runs.)
 
-Outside the folder: `rapportkit_<tenant>_<year-month>.zip.rkenc` with a `.sha256` file, so that the recipient can check that the file arrived unchanged (turn off with `-NoZip`). Encryption is **optional**: the script asks at the start whether the package should be encrypted, and if you answer yes the file is **password-encrypted** (AES-256) with a password you enter (at least 12 characters, confirmed twice). If you answer no (or use `-NoEncrypt`) you get an ordinary `.zip`. Whoever runs it sends the file and the password by **different routes** (for example the file by e-mail and the password by SMS). The recipient unpacks with `Unprotect-Rapportkit.ps1` (see below). The folder with unencrypted results stays on the customer's computer and should be deleted when the assignment is done. `-NoEncrypt` gives an ordinary zip (only if the result does not leave the computer).
+Outside the folder: `rapportkit_<tenant>_<year-month>.zip.rkenc` with a `.sha256` file, so that the recipient can check that the file arrived unchanged (turn off with `-NoZip`). The zip holds the newest run of each tool, not Maester's test suite; earlier runs in the same folder stay on the disk. Encryption is **optional**: the script asks at the start whether the package should be encrypted, and if you answer yes the file is **password-encrypted** (AES-256) with a password you enter (at least 12 characters, confirmed twice). If you answer no (or use `-NoEncrypt`) you get an ordinary `.zip`. Whoever runs it sends the file and the password by **different routes** (for example the file by e-mail and the password by SMS). The recipient unpacks with `Unprotect-Rapportkit.ps1` (see below). The folder with unencrypted results stays on the customer's computer and should be deleted when the assignment is done. `-NoEncrypt` gives an ordinary zip (only if the result does not leave the computer).
 
 ### Unpack an encrypted package
 
