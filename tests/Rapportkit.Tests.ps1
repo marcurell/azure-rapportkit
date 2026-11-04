@@ -289,6 +289,33 @@ Describe 'Zip av resultatmappen' {
         }
         finally { $z.Dispose() }
     }
+    It 'rapporterar framsteg: först antalet filer, sedan hur långt den har kommit' {
+        $script:Calls = [System.Collections.Generic.List[object]]::new()
+        $zip = Join-Path $TestDrive 'progress.zip'
+        New-ResultZip $script:Run $zip { param($done, $total) $script:Calls.Add(@($done, $total)) } 0
+        $script:Calls[0][0] | Should -Be 0
+        $script:Calls[0][1] | Should -Be $script:Entries.Count
+        $script:Calls.Count | Should -BeGreaterThan 2
+        foreach ($c in $script:Calls) { $c[1] | Should -Be $script:Entries.Count }
+        $done = @($script:Calls | ForEach-Object { $_[0] })
+        $done | Should -Be @($done | Sort-Object)             # never backwards
+        $done[-1] | Should -BeLessOrEqual ($script:Entries.Count - 1)
+    }
+    It 'rapporterar inte framsteg oftare än med det angivna intervallet' {
+        $script:Calls = [System.Collections.Generic.List[object]]::new()
+        $zip = Join-Path $TestDrive 'quiet.zip'
+        New-ResultZip $script:Run $zip { param($done, $total) $script:Calls.Add(@($done, $total)) } 3600
+        $script:Calls.Count | Should -Be 1                      # only the starting message
+    }
+    It 'öppnar rapporten innan zippen skapas, och zippen skriver framsteg' {
+        $code = Get-Content $script:ScriptPath -Raw -Encoding UTF8
+        $open = $code.IndexOf('Start-Process $reportPath')
+        $zipStart = $code.IndexOf('$zipProgress = {')
+        $open | Should -BeGreaterThan 0
+        $open | Should -BeLessThan $zipStart
+        ([regex]::Matches($code, 'Start-Process \$reportPath')).Count | Should -Be 1
+        ([regex]::Matches($code, 'New-ResultZip \$RunDir \S+ \$zipProgress')).Count | Should -Be 2
+    }
     It 'läser en fil som något annat håller öppen för skrivning' {
         $busy = Join-Path $script:Run 'rapportkit.log'
         $h = [System.IO.File]::Open($busy, 'Open', 'Write', 'ReadWrite')

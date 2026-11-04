@@ -152,7 +152,7 @@ $TotalSteps = 10
 # Governance Visualizer is fetched as a fixed version (the one that was tested). Changed on purpose, not by accident.
 $GvVersion = '6.7.2'
 $GvUrl = "https://github.com/Azure/Azure-Governance-Visualizer/archive/refs/tags/$GvVersion.zip"
-$KitVersion = '1.4.5'
+$KitVersion = '1.4.6'
 
 # Tested (pinned) tool versions, and checksums (SHA256) for the zip files that are fetched directly. The customer then gets
 # the same tools that we tested, and a changed file is detected. Tools installed via winget are checked by winget
@@ -741,11 +741,17 @@ function Get-ZipFiles([string]$Root) {
 
 # Zips the files from Get-ZipFiles with forward slashes in the entry names (Compress-Archive in Windows PowerShell 5.1 writes backslashes),
 # and without holding the whole content in memory. A file that is open for writing by someone else is read anyway.
-function New-ResultZip([string]$SourceDir, [string]$DestinationPath) {
+function New-ResultZip([string]$SourceDir, [string]$DestinationPath, [scriptblock]$OnProgress, [double]$ProgressSeconds = 10) {
     Add-Type -AssemblyName System.IO.Compression, System.IO.Compression.FileSystem
+    $items = @(Get-ZipFiles $SourceDir)
+    $done = 0; $clock = [System.Diagnostics.Stopwatch]::StartNew(); $lastReport = 0.0
+    # The zip of a large environment takes minutes (thousands of files, and virus protection scans every one): say how far it has come.
+    if ($OnProgress) { & $OnProgress 0 $items.Count }
     $zip = [System.IO.Compression.ZipFile]::Open($DestinationPath, [System.IO.Compression.ZipArchiveMode]::Create)
     try {
-        foreach ($item in @(Get-ZipFiles $SourceDir)) {
+        foreach ($item in $items) {
+            if ($OnProgress -and $done -gt 0 -and ($clock.Elapsed.TotalSeconds - $lastReport) -ge $ProgressSeconds) { $lastReport = $clock.Elapsed.TotalSeconds; & $OnProgress $done $items.Count }
+            $done++
             $entry = $zip.CreateEntry($item.Entry, [System.IO.Compression.CompressionLevel]::Optimal)
             try { $entry.LastWriteTime = (Get-Item -LiteralPath $item.File).LastWriteTime } catch { }
             $out = $entry.Open()
@@ -1668,6 +1674,9 @@ try {
     . $reportLib
     $reportPath = Write-ReportSite
     Write-Ok "Report: $reportPath"
+    # The report opens now and not after the zip: in a large environment the zip takes minutes, and the report is already ready.
+    # RAPPORTKIT_NOOPEN is used in automated tests so that no browser is started.
+    if (-not $env:RAPPORTKIT_NOOPEN) { try { Start-Process $reportPath } catch { } }
     # =======================================================================
     # Finish: run summary, zip for delivery, summary box, sign-out and cleanup.
     # =======================================================================
@@ -1679,6 +1688,12 @@ try {
     # Zip of the result folder for delivery, with SHA256 so that the recipient can check that the file arrived unchanged.
     # Only the newest run of the tools goes into the zip, and not the console log or Maester's test suite (see Get-ZipFiles).
     $zipPath = $null; $zipHash = $null
+    $zipProgress = {
+        param($done, $total)
+        if ($done -eq 0) { Write-Action ('Creating the zip file: {0:N0} files. This can take several minutes in a large environment. The report is already ready: {1}' -f $total, $reportPath) }
+        else { Write-Host ('     ... {0:N0} of {1:N0} files ({2} %)' -f $done, $total, [math]::Floor(100 * $done / $total)) -ForegroundColor DarkGray }
+    }
+    $zipClock = [System.Diagnostics.Stopwatch]::StartNew()
     if (-not $NoZip) {
         try {
             $zipPath = Join-Path $OutputRoot ('rapportkit_{0}_{1}.zip' -f $TenantId.Substring(0, 8), $Period)
@@ -1689,9 +1704,10 @@ try {
                 $plainZip = Join-Path ([System.IO.Path]::GetTempPath()) ('rapportkit-' + [guid]::NewGuid().ToString('N') + '.zip')
                 $checkZip = "$plainZip.check"
                 try {
-                    New-ResultZip $RunDir $plainZip
+                    New-ResultZip $RunDir $plainZip $zipProgress
                     Write-Action 'Encrypting the zip file (AES-256)'
                     Protect-RapportkitFile -Path $plainZip -Destination $zipPath -Password $ZipPassword
+                    Write-Action 'Checking the encrypted file (decrypting it again)'
                     Unprotect-RapportkitFile -Path $zipPath -Destination $checkZip -Password $ZipPassword
                     if ((Get-FileHash $checkZip -Algorithm SHA256).Hash -ne (Get-FileHash $plainZip -Algorithm SHA256).Hash) { throw 'The check of the encrypted file failed (the content does not match after decryption).' }
                 }
@@ -1700,11 +1716,11 @@ try {
             }
             else {
                 Add-Warning 'The zip file is NOT encrypted (-NoEncrypt). Do not send it by e-mail.'
-                New-ResultZip $RunDir $zipPath
+                New-ResultZip $RunDir $zipPath $zipProgress
             }
             $zipHash = (Get-FileHash $zipPath -Algorithm SHA256).Hash
             Set-Content -Path "$zipPath.sha256" -Value ('{0} *{1}' -f $zipHash, (Split-Path $zipPath -Leaf)) -Encoding ascii
-            Write-Ok ('Zip created ({0:N1} MB), checksum saved in {1}.sha256' -f ((Get-Item $zipPath).Length / 1MB), (Split-Path $zipPath -Leaf))
+            Write-Ok ('Zip created ({0:N1} MB, {1}), checksum saved in {2}.sha256' -f ((Get-Item $zipPath).Length / 1MB), (Format-Duration $zipClock.Elapsed.TotalSeconds), (Split-Path $zipPath -Leaf))
         }
         catch { Add-Warning "Could not create the zip file: $($_.Exception.Message)"; $zipPath = $null }
     }
@@ -1729,8 +1745,6 @@ try {
 
     $Completed = $true
     Write-Log 'DONE' "The run is complete. Exit code $ExitCode"
-    # RAPPORTKIT_NOOPEN is used in automated tests so that no browser is started.
-    if (-not $env:RAPPORTKIT_NOOPEN) { try { Start-Process $reportPath } catch { } }
 }
 catch {
     # Interruption: write what happened, what to do and the exact command to run again.

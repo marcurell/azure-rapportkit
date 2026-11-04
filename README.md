@@ -23,10 +23,10 @@ Open PowerShell or PowerShell ISE and paste the block below. It downloads the co
 $dest = Join-Path $env:USERPROFILE 'rapportkit-kit'
 $zip  = Join-Path $env:TEMP 'azure-rapportkit.zip'
 New-Item -ItemType Directory -Force $dest | Out-Null
-Invoke-WebRequest 'https://github.com/marcurell/azure-rapportkit/archive/refs/tags/v1.4.5.zip' -OutFile $zip
+Invoke-WebRequest 'https://github.com/marcurell/azure-rapportkit/archive/refs/tags/v1.4.6.zip' -OutFile $zip
 Expand-Archive $zip $dest -Force
 Get-ChildItem $dest -Recurse | Unblock-File
-$script = Join-Path $dest 'azure-rapportkit-1.4.5\Run-Rapportkit.ps1'
+$script = Join-Path $dest 'azure-rapportkit-1.4.6\Run-Rapportkit.ps1'
 $arg = '-NoExit -ExecutionPolicy Bypass -File "' + $script + '"'
 Start-Process powershell -ArgumentList $arg
 ```
