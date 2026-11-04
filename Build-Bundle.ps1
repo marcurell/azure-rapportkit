@@ -1,7 +1,7 @@
 ﻿<#
 .SYNOPSIS
-  Downloads all the tools to tools\ and packs the script + the tools in a zip that can be sent to the customer.
-  The customer then runs: .\Run-Rapportkit.ps1 -Offline
+  Downloads all the tools to tools\ and packs the script + the tools in a zip for a computer without internet access.
+  On that computer, run: .\Run-Rapportkit.ps1 -Offline
 
 .DESCRIPTION
   Versions and checksums are read from Run-Rapportkit.ps1 ($Pins), so that the bundle always contains exactly the
@@ -10,9 +10,9 @@
 .PARAMETER Out
   Path of the zip file that is created.
 .PARAMETER Language
-  Language of the report text and of the customer documents in the bundle (en, sv). Default: the language in branding\theme.json, else English.
+  Language of the report text in the bundle (en, sv). Written as "language" in branding\theme.json in the bundle. Default: the language in branding\theme.json, else English.
 .PARAMETER SkipInstallers
-  Skip the large installer files (PowerShell 7, Azure CLI, Git) if the customer already has them.
+  Skip the large installer files (PowerShell 7, Azure CLI, Git) if the computer already has them.
 #>
 [CmdletBinding()]
 param(
@@ -122,10 +122,9 @@ if (Test-Path $stage) { Remove-Item $stage -Recurse -Force }
 New-Item -ItemType Directory $stage | Out-Null
 foreach ($file in 'Run-Rapportkit.ps1', 'LICENSE', 'THIRD-PARTY-NOTICES.md') { Copy-Item (Join-Path $PSScriptRoot $file) $stage }
 foreach ($dir in 'lib', 'lang', 'branding', 'branding-exempel') { Copy-Item (Join-Path $PSScriptRoot $dir) "$stage\$dir" -Recurse }
-# Customer version: the customer's README and guide in the chosen language (nothing that points to the repo).
+foreach ($doc in 'README.md', 'README.sv.md') { Copy-Item (Join-Path $PSScriptRoot $doc) $stage }
 . (Join-Path $PSScriptRoot 'lib\Packaging.ps1')
 if ($Language) { Set-ThemeLanguage "$stage\branding\theme.json" $Language }
-[void](Copy-CustomerDocs $PSScriptRoot $stage $Language)
 Copy-Item $tools "$stage\tools" -Recurse
 Compress-Archive "$stage\*" $Out
 Remove-Item $stage -Recurse -Force

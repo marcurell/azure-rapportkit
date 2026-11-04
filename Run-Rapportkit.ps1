@@ -152,7 +152,7 @@ $TotalSteps = 10
 # Governance Visualizer is fetched as a fixed version (the one that was tested). Changed on purpose, not by accident.
 $GvVersion = '6.7.2'
 $GvUrl = "https://github.com/Azure/Azure-Governance-Visualizer/archive/refs/tags/$GvVersion.zip"
-$KitVersion = '1.4.6'
+$KitVersion = '1.5.0'
 
 # Tested (pinned) tool versions, and checksums (SHA256) for the zip files that are fetched directly. The customer then gets
 # the same tools that we tested, and a changed file is detected. Tools installed via winget are checked by winget

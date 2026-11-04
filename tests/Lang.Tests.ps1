@@ -1,6 +1,6 @@
 ﻿#Requires -Modules @{ ModuleName = 'Pester'; ModuleVersion = '5.0.0' }
 <#
-  Tests for the language packs (lib\Lang.ps1, lang\*.psd1) and for the language handling when a kit is packed (lib\Packaging.ps1).
+  Tests for the language packs (lib\Lang.ps1, lang\*.psd1) and for setting the report language in a theme.json (lib\Packaging.ps1).
 
   Run:  Invoke-Pester .\tests
 #>
@@ -114,17 +114,5 @@ Describe 'Set-ThemeLanguage' {
         "{`n}" | Set-Content $f -Encoding utf8
         Set-ThemeLanguage $f 'sv'
         (Get-Content $f -Raw | ConvertFrom-Json).language | Should -Be 'sv'
-    }
-}
-
-Describe 'Copy-CustomerDocs' {
-    It 'väljer svenska dokument för sv-SE, och engelska för språk utan dokument' {
-        foreach ($case in @(@('sv-SE', 'sv', 'Extrahera alla'), @('sv', 'sv', 'Extrahera alla'), @('en', 'en', 'Extract All'), @('de', 'en', 'Extract All'))) {
-            $stage = Join-Path $TestDrive ('stage-' + $case[0]); New-Item -ItemType Directory $stage | Out-Null
-            Copy-CustomerDocs $script:Repo $stage $case[0] | Should -Be $case[1]
-            (Get-Content (Join-Path $stage 'README.md') -Raw -Encoding UTF8) | Should -Match $case[2]
-        }
-        Test-Path (Join-Path $TestDrive 'stage-sv-SE\docs\Azure-Rapportkit-Kundguide.docx') | Should -BeTrue
-        Test-Path (Join-Path $TestDrive 'stage-de\docs\Azure-Rapportkit-Customer-guide.docx') | Should -BeTrue
     }
 }

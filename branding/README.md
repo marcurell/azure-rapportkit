@@ -13,13 +13,12 @@ branding\
   custom.css       <- optional: your own CSS rules, added last
 ```
 
-## How to make a customer version with another profile
+## How to use another profile
 
 1. Make a folder with your profile (copy `..\branding-exempel\neutral\theme.json` as a starting point, change it and add a logo).
-2. Run `.\Pack-Kit.ps1 -Branding D:\profiles\customer\branding` (add `-Language sv` for a Swedish report). That gives a zip of the kit where `branding\` is your folder.
-3. Give the zip to the customer. The report gets exactly the profile that is in the zip.
+2. Replace the files in `branding\` with it. The report gets exactly the profile that is in `branding\` when it is built.
 
-If you only want to test the look on an existing run without running the tools again: replace the files in `branding\` and run
+To try the look on an existing run without running the tools again: replace the files in `branding\` and run
 `.\Run-Rapportkit.ps1 -ReportOnly -Period <year-month>`.
 
 If `theme.json` is missing or something is invalid, the report falls back on built-in defaults and the script writes a
@@ -66,7 +65,7 @@ webp, at most 300 KB). It is embedded in every page, so the report is self-conta
 
 - **Rights:** only use a brand (name, logo, colours) that you have the right to use. A profile for someone
   else's brand, for example a customer's or an employer's, requires their permission. Do not put it in the public repo:
-  use `Pack-Kit.ps1` with a folder outside the repo.
+  keep it in a folder outside the repo.
 - **A profile from an unknown source:** `theme.json` is validated (colours and fonts are checked, and only known colour names are allowed in
   the logo), but `custom.css` is included as it is. Review it before you use a profile you did not write yourself.
 - **Fonts:** the report does not embed font files (they would make every page several hundred kB larger). Moln på

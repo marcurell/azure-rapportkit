@@ -12,7 +12,7 @@ A PowerShell script that produces the material for an Azure review. It fetches t
 | [azqr](https://github.com/Azure/azqr) | Recommendations per resource, Advisor, Defender |
 | [Maester](https://maester.dev) (optional) | Tests of Entra ID: MFA, Conditional Access, privileged roles |
 
-The script **writes nothing to Azure resources or to the Entra configuration**. It does, however, do the following, which is good to know: it installs tools on the computer, creates sign-in sessions (which show in the tenant's logs), requires an administrator to approve read permissions for Maester (admin consent, a change in the tenant), and saves confidential results locally. All of this is described for the customer in [docs/KUNDINFO.en.md](docs/KUNDINFO.en.md). The tools and their licences are in [THIRD-PARTY-NOTICES.md](THIRD-PARTY-NOTICES.md). Step by step for whoever runs the tool: [User guide (Word)](docs/Anvandarguide-Azure-Rapportkit.docx) (Swedish).
+The script **writes nothing to Azure resources or to the Entra configuration**. It does, however, do the following, which is good to know: it installs tools on the computer, creates sign-in sessions (which show in the tenant's logs), requires an administrator to approve read permissions for Maester (admin consent, a change in the tenant), and saves confidential results locally. The script is one file plus a few files in `lib\`, so it is easy to read before you run it. The tools and their licences are in [THIRD-PARTY-NOTICES.md](THIRD-PARTY-NOTICES.md).
 
 ## Quick start: one command
 
@@ -23,10 +23,10 @@ Open PowerShell or PowerShell ISE and paste the block below. It downloads the co
 $dest = Join-Path $env:USERPROFILE 'rapportkit-kit'
 $zip  = Join-Path $env:TEMP 'azure-rapportkit.zip'
 New-Item -ItemType Directory -Force $dest | Out-Null
-Invoke-WebRequest 'https://github.com/marcurell/azure-rapportkit/archive/refs/tags/v1.4.6.zip' -OutFile $zip
+Invoke-WebRequest 'https://github.com/marcurell/azure-rapportkit/archive/refs/tags/v1.5.0.zip' -OutFile $zip
 Expand-Archive $zip $dest -Force
 Get-ChildItem $dest -Recurse | Unblock-File
-$script = Join-Path $dest 'azure-rapportkit-1.4.6\Run-Rapportkit.ps1'
+$script = Join-Path $dest 'azure-rapportkit-1.5.0\Run-Rapportkit.ps1'
 $arg = '-NoExit -ExecutionPolicy Bypass -File "' + $script + '"'
 Start-Process powershell -ArgumentList $arg
 ```
@@ -34,16 +34,6 @@ Start-Process powershell -ArgumentList $arg
 Why a new window: PowerShell ISE cannot handle the sign-in windows and prompts from PowerShell 7, so the script should not be run directly in ISE.
 
 Have the tenant ID at hand (Entra ID > Overview > Tenant ID). The script asks for it, and then two sign-in windows open in the browser.
-
-## Customer version (a zip that is e-mailed)
-
-Customers are not sent the link to this repo but a ready-made zip with the customer's own README and guide (`docs\kund\`), the wanted branding and the wanted report language:
-
-```powershell
-.\Pack-Kit.ps1 -Branding D:\profiles\customer\branding -Language sv    # without -Branding the kit's own branding\ is used
-```
-
-The zip contains nothing that points to the repo. The customer unpacks it, unblocks it and runs `Run-Rapportkit.ps1`, and sends back the encrypted result package (`.rkenc`) and the password by separate routes. You unpack it with `Unprotect-Rapportkit.ps1`. The offline package (`Build-Bundle.ps1`) contains the same customer documents. `-Language` sets the language of the report text and picks the customer README, `KUNDINFO` and guide in that language.
 
 ## Download manually
 
@@ -73,7 +63,7 @@ The script first asks **where the result should be saved** (suggestion: `%USERPR
 The report text is in English (`en`) or Swedish (`sv`). The script's own messages in the window are always in English. The language is chosen, in this order, by:
 
 1. `-ReportLanguage <code>` on `Run-Rapportkit.ps1` (`-ReportLanguage sv`),
-2. `"language"` in `branding\theme.json` (what `Pack-Kit.ps1 -Language sv` writes in the customer zip),
+2. `"language"` in `branding\theme.json`,
 3. otherwise English.
 
 The texts are in language packs: `lang\en.psd1` (the base, every key must exist there) and `lang\sv.psd1`. A key that is missing in a translation falls back to English. To add a language: copy `lang\en.psd1` to `lang\<code>.psd1`, translate the values (keep the placeholders `{0}`, `{1}` and keys ending in `.html` as HTML) and run `-ReportLanguage <code>`. The tests check that every pack has the same keys and placeholders as `en.psd1`. Rebuild an older run in another language without running the tools again: `.\Run-Rapportkit.ps1 -ReportOnly -Period 2026-10 -ReportLanguage sv`.
@@ -94,7 +84,7 @@ Everything ends up in `<result folder>\<year-month>\`:
 
 (The CSV files keep Swedish column names and file names: they are a data format shared with older runs.)
 
-Outside the folder: `rapportkit_<tenant>_<year-month>.zip.rkenc` with a `.sha256` file, so that the recipient can check that the file arrived unchanged (turn off with `-NoZip`). The zip holds the newest run of each tool, not Maester's test suite; earlier runs in the same folder stay on the disk. Encryption is **optional**: the script asks at the start whether the package should be encrypted, and if you answer yes the file is **password-encrypted** (AES-256) with a password you enter (at least 12 characters, confirmed twice). If you answer no (or use `-NoEncrypt`) you get an ordinary `.zip`. Whoever runs it sends the file and the password by **different routes** (for example the file by e-mail and the password by SMS). The recipient unpacks with `Unprotect-Rapportkit.ps1` (see below). The folder with unencrypted results stays on the customer's computer and should be deleted when the assignment is done. `-NoEncrypt` gives an ordinary zip (only if the result does not leave the computer).
+Outside the folder: `rapportkit_<tenant>_<year-month>.zip.rkenc` with a `.sha256` file, so that the recipient can check that the file arrived unchanged (turn off with `-NoZip`). The zip holds the newest run of each tool, not Maester's test suite; earlier runs in the same folder stay on the disk. Encryption is **optional**: the script asks at the start whether the package should be encrypted, and if you answer yes the file is **password-encrypted** (AES-256) with a password you enter (at least 12 characters, confirmed twice). If you answer no (or use `-NoEncrypt`) you get an ordinary `.zip`. Whoever runs it sends the file and the password by **different routes** (for example the file by e-mail and the password by SMS). The recipient unpacks with `Unprotect-Rapportkit.ps1` (see below). The folder with unencrypted results stays on the computer that ran the script and should be deleted when it is no longer needed. `-NoEncrypt` gives an ordinary zip (only if the result does not leave the computer).
 
 ### Unpack an encrypted package
 
@@ -110,11 +100,10 @@ The script checks the `.sha256` file if it is next to the package, asks for the 
 
 The report is a multi-page website in one common style, with navigation, light and dark mode (follows the reader's setting) and a print mode. The button "Save the whole report as PDF" opens a combination of all the pages (`rapport-komplett.html`) and shows the print dialog.
 
-The look is **the files in the folder `branding\`** (`theme.json`, logo, background, `custom.css`). There is no switch: replace the files and you get a new look. The default is Moln på svenska. For a customer version with another profile you make a zip with `Pack-Kit.ps1`:
+The look is **the files in the folder `branding\`** (`theme.json`, logo, background, `custom.css`). There is no switch: replace the files and you get a new look. The default is Moln på svenska. For another profile, replace the files in `branding\` and rebuild the report from existing results, without running the tools again:
 
 ```powershell
-.\Pack-Kit.ps1 -Branding D:\profiles\customer\branding     # zip of the kit with your branding\ instead
-.\Run-Rapportkit.ps1 -ReportOnly -Period 2026-10             # rebuild the report from existing results, without running the tools
+.\Run-Rapportkit.ps1 -ReportOnly -Period 2026-10
 ```
 
 See [branding/README.md](branding/README.md) for the files and the fields in `theme.json`. If something is missing or invalid, built-in defaults are used and the script warns. An example of another profile is in `branding-exempel\neutral`.
@@ -194,7 +183,7 @@ If the account only has access to one subscription Governance Visualizer fails t
 
 ## Offline bundle
 
-If the customer's computer cannot fetch things itself: run `Build-Bundle.ps1` on a computer with internet. It downloads the pinned versions to `tools\` (the checksums are checked), and packs the script, the tools, the licence texts and the customer information in `rapportkit-bundle.zip` with a `.sha256` file. The customer unpacks the zip and runs `.\Run-Rapportkit.ps1 -Offline`.
+If the computer that runs the script cannot fetch things itself: run `Build-Bundle.ps1` on a computer with internet. It downloads the pinned versions to `tools\` (the checksums are checked), and packs the script, the tools, the licence texts and the README in `rapportkit-bundle.zip` with a `.sha256` file. Unpack the zip on the other computer and run `.\Run-Rapportkit.ps1 -Offline`.
 
 ```powershell
 .\Build-Bundle.ps1                  # with installers (~300 MB)

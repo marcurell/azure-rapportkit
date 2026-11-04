@@ -14,13 +14,12 @@ branding\
   custom.css       <- valfritt: egna CSS-regler som läggs sist
 ```
 
-## Så gör du en kundversion med en annan profil
+## Så använder du en annan profil
 
 1. Gör en mapp med din profil (kopiera `..\branding-exempel\neutral\theme.json` som utgångspunkt, ändra och lägg till logga).
-2. Kör `.\Pack-Kit.ps1 -Branding D:\profiler\kund\branding`. Det ger en zip av kitet där `branding\` är din mapp.
-3. Ge zippen till kunden. Rapporten får exakt den profil som ligger i zippen.
+2. Byt filerna i `branding\` mot den. Rapporten får exakt den profil som ligger i `branding\` när den byggs.
 
-Vill du bara testa utseendet på en befintlig körning utan att köra verktygen igen: byt filerna i `branding\` och kör
+Vill du testa utseendet på en befintlig körning utan att köra verktygen igen: byt filerna i `branding\` och kör
 `.\Run-Rapportkit.ps1 -ReportOnly -Period <år-månad>`.
 
 Saknas `theme.json` eller är något ogiltigt faller rapporten tillbaka på inbyggda standardvärden och scriptet skriver en
@@ -67,7 +66,7 @@ webp, högst 300 KB). Den bäddas in i varje sida, så rapporten är fristående
 
 - **Rättigheter:** använd bara ett varumärke (namn, logga, färger) som du har rätt att använda. En profil för någon
   annans varumärke, till exempel en kunds eller en arbetsgivares, kräver deras tillstånd. Lägg den inte i det publika repot:
-  använd `Pack-Kit.ps1` med en mapp utanför repot.
+  ha den i en mapp utanför repot.
 - **Profil från okänd källa:** `theme.json` valideras (färger och typsnitt kontrolleras, och bara kända färgnamn tillåts i
   loggan), men `custom.css` läggs in som den är. Granska den innan du använder en profil du inte skrivit själv.
 - **Typsnitt:** rapporten bäddar inte in typsnittsfiler (de skulle göra varje sida flera hundra kB större). Moln på

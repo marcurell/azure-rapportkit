@@ -12,7 +12,7 @@ Ett PowerShell-script som tar fram underlag inför en Azure-genomgång. Det häm
 | [azqr](https://github.com/Azure/azqr) | Rekommendationer per resurs, Advisor, Defender |
 | [Maester](https://maester.dev) (valfritt) | Tester av Entra ID: MFA, Conditional Access, privilegierade roller |
 
-Scriptet **skriver inget i Azure-resurser eller i Entra-konfigurationen**. Det gör däremot följande, vilket är bra att veta: det installerar verktyg på datorn, skapar inloggningssessioner (som syns i tenantens loggar), kräver att en administratör godkänner läsbehörigheter för Maester (admin consent, en ändring i tenanten), och sparar konfidentiella resultat lokalt. Allt detta beskrivs för kunden i [docs/KUNDINFO.sv.md](docs/KUNDINFO.sv.md). Verktygen och deras licenser finns i [THIRD-PARTY-NOTICES.md](THIRD-PARTY-NOTICES.md). Steg för steg för den som kör verktyget: [Användarguide (Word)](docs/Anvandarguide-Azure-Rapportkit.docx).
+Scriptet **skriver inget i Azure-resurser eller i Entra-konfigurationen**. Det gör däremot följande, vilket är bra att veta: det installerar verktyg på datorn, skapar inloggningssessioner (som syns i tenantens loggar), kräver att en administratör godkänner läsbehörigheter för Maester (admin consent, en ändring i tenanten), och sparar konfidentiella resultat lokalt. Scriptet är en fil plus några filer i `lib\`, så det är lätt att läsa igenom innan du kör det. Verktygen och deras licenser finns i [THIRD-PARTY-NOTICES.md](THIRD-PARTY-NOTICES.md).
 
 ## Snabbstart: ett kommando
 
@@ -23,10 +23,10 @@ Scriptet **skriver inget i Azure-resurser eller i Entra-konfigurationen**. Det g
 $dest = Join-Path $env:USERPROFILE 'rapportkit-kit'
 $zip  = Join-Path $env:TEMP 'azure-rapportkit.zip'
 New-Item -ItemType Directory -Force $dest | Out-Null
-Invoke-WebRequest 'https://github.com/marcurell/azure-rapportkit/archive/refs/tags/v1.4.6.zip' -OutFile $zip
+Invoke-WebRequest 'https://github.com/marcurell/azure-rapportkit/archive/refs/tags/v1.5.0.zip' -OutFile $zip
 Expand-Archive $zip $dest -Force
 Get-ChildItem $dest -Recurse | Unblock-File
-$script = Join-Path $dest 'azure-rapportkit-1.4.6\Run-Rapportkit.ps1'
+$script = Join-Path $dest 'azure-rapportkit-1.5.0\Run-Rapportkit.ps1'
 $arg = '-NoExit -ExecutionPolicy Bypass -File "' + $script + '"'
 Start-Process powershell -ArgumentList $arg
 ```
@@ -34,16 +34,6 @@ Start-Process powershell -ArgumentList $arg
 Varför ett nytt fönster: PowerShell ISE klarar inte inloggningsfönster och frågor från PowerShell 7, så scriptet ska inte köras direkt i ISE.
 
 Du behöver ha tenant-ID:t till hands (Entra ID > Overview > Tenant ID). Scriptet frågar efter det, och därefter öppnas två inloggningsfönster i webbläsaren.
-
-## Kundversion (zip som mejlas)
-
-Till kunder skickas inte länken till det här repot utan en färdig zip med kundens egen README och guide (`docs\kund\`), önskad branding och önskat rapportspråk:
-
-```powershell
-.\Pack-Kit.ps1 -Branding D:\profiler\kund\branding -Language sv    # utan -Branding används kitets egen branding\
-```
-
-Zippen innehåller inget som pekar på repot. Kunden packar upp, avblockerar och kör `Run-Rapportkit.ps1`, och skickar tillbaka det krypterade resultatpaketet (`.rkenc`) och lösenordet var för sig. Du packar upp det med `Unprotect-Rapportkit.ps1`. Offline-paketet (`Build-Bundle.ps1`) innehåller samma kunddokument. `-Language` sätter språket på rapportens text och väljer kundens README, `KUNDINFO` och guide på det språket.
 
 ## Ladda ner manuellt
 
@@ -73,7 +63,7 @@ Scriptet frågar först **var resultatet ska sparas** (förslag: `%USERPROFILE%\
 Rapportens text finns på svenska (`sv`) och engelska (`en`). Scriptets egna meddelanden i fönstret är alltid på engelska. Språket väljs, i den här ordningen, av:
 
 1. `-ReportLanguage <kod>` på `Run-Rapportkit.ps1` (`-ReportLanguage sv`),
-2. `"language"` i `branding\theme.json` (det `Pack-Kit.ps1 -Language sv` skriver in i kundens zip),
+2. `"language"` i `branding\theme.json`,
 3. annars engelska.
 
 Texterna ligger i språkpaket: `lang\en.psd1` (basen, alla nycklar ska finnas där) och `lang\sv.psd1`. En nyckel som saknas i en översättning faller tillbaka på engelska. Lägg till ett språk genom att kopiera `lang\en.psd1` till `lang\<kod>.psd1`, översätta värdena (behåll platshållarna `{0}`, `{1}` och nycklar som slutar på `.html` som HTML) och köra `-ReportLanguage <kod>`. Testerna kontrollerar att alla paket har samma nycklar och platshållare som `en.psd1`. Bygg om en äldre körning på ett annat språk utan att köra verktygen igen: `.\Run-Rapportkit.ps1 -ReportOnly -Period 2026-10 -ReportLanguage en`.
@@ -92,7 +82,7 @@ Allt hamnar i `<resultatmapp>\<år-månad>\`:
 | `rapportkit-console.log` | Hela konsolutskriften inklusive verktygens text (felsökning; tas inte med i zippen) |
 | `run-summary.json` | Maskinläsbar sammanfattning: versioner, tid per steg, status, varningar, slutkod |
 
-Utanför mappen: `rapportkit_<tenant>_<år-månad>.zip.rkenc` med en `.sha256`-fil, så att mottagaren kan kontrollera att filen kommit fram oförändrad (stäng av med `-NoZip`). Zippen innehåller den senaste körningen av varje verktyg, inte Maesters testsvit; tidigare körningar i samma mapp finns kvar på disken. Kryptering är **valfri**: scriptet frågar i början om paketet ska krypteras, och svarar du ja är filen **lösenordskrypterad** (AES-256) med ett lösenord du anger (minst 12 tecken, bekräftas två gånger). Svarar du nej (eller använder `-NoEncrypt`) blir det en vanlig `.zip`. Den som kör skickar filen och lösenordet på **olika vägar** (till exempel filen via e-post och lösenordet via SMS). Mottagaren packar upp med `Unprotect-Rapportkit.ps1` (se nedan). Mappen med okrypterade resultat ligger kvar på kundens dator och bör tas bort när uppdraget är klart. `-NoEncrypt` ger en vanlig zip (bara om resultatet inte lämnar datorn).
+Utanför mappen: `rapportkit_<tenant>_<år-månad>.zip.rkenc` med en `.sha256`-fil, så att mottagaren kan kontrollera att filen kommit fram oförändrad (stäng av med `-NoZip`). Zippen innehåller den senaste körningen av varje verktyg, inte Maesters testsvit; tidigare körningar i samma mapp finns kvar på disken. Kryptering är **valfri**: scriptet frågar i början om paketet ska krypteras, och svarar du ja är filen **lösenordskrypterad** (AES-256) med ett lösenord du anger (minst 12 tecken, bekräftas två gånger). Svarar du nej (eller använder `-NoEncrypt`) blir det en vanlig `.zip`. Den som kör skickar filen och lösenordet på **olika vägar** (till exempel filen via e-post och lösenordet via SMS). Mottagaren packar upp med `Unprotect-Rapportkit.ps1` (se nedan). Mappen med okrypterade resultat ligger kvar på datorn som körde scriptet och bör tas bort när den inte behövs längre. `-NoEncrypt` ger en vanlig zip (bara om resultatet inte lämnar datorn).
 
 ### Packa upp ett krypterat paket
 
@@ -108,11 +98,10 @@ Scriptet kontrollerar `.sha256`-filen om den ligger bredvid, frågar efter löse
 
 Rapporten är en flersidig webbplats i en gemensam stil, med navigering, ljust och mörkt läge (följer läsarens inställning) och utskriftsläge. Knappen "Spara hela rapporten som PDF" öppnar en sammanställning av alla sidor (`rapport-komplett.html`) och visar utskriftsdialogen.
 
-Utseendet är **filerna i mappen `branding\`** (`theme.json`, logga, bakgrund, `custom.css`). Det finns ingen flagga: byt filerna så blir det ett nytt utseende. Standard är Moln på svenska. För en kundversion med en annan profil gör du en zip med `Pack-Kit.ps1`:
+Utseendet är **filerna i mappen `branding\`** (`theme.json`, logga, bakgrund, `custom.css`). Det finns ingen flagga: byt filerna så blir det ett nytt utseende. Standard är Moln på svenska. För en annan profil byter du filerna i `branding\` och bygger om rapporten av befintliga resultat, utan att köra verktygen igen:
 
 ```powershell
-.\Pack-Kit.ps1 -Branding D:\profiler\kund\branding     # zip av kitet med din branding\ i stället
-.\Run-Rapportkit.ps1 -ReportOnly -Period 2026-10         # bygg om rapporten från befintliga resultat, utan att köra verktygen
+.\Run-Rapportkit.ps1 -ReportOnly -Period 2026-10
 ```
 
 Se [branding/README.md](branding/README.md) för filerna och fälten i `theme.json`. Saknas eller är något ogiltigt används inbyggda standardvärden och scriptet varnar. Ett exempel på en annan profil finns i `branding-exempel\neutral`.
@@ -192,7 +181,7 @@ Har kontot bara åtkomst till en subscription faller Governance Visualizer på b
 
 ## Offline-bundle
 
-Kan kundens dator inte hämta saker själv: kör `Build-Bundle.ps1` på en dator med internet. Det laddar ner de fasta versionerna till `tools\` (kontrollsummorna kontrolleras), och packar scriptet, verktygen, licenstexterna och kundinformationen i `rapportkit-bundle.zip` med en `.sha256`-fil. Kunden packar upp zippen och kör `.\Run-Rapportkit.ps1 -Offline`.
+Kan datorn som ska köra scriptet inte hämta saker själv: kör `Build-Bundle.ps1` på en dator med internet. Det laddar ner de fasta versionerna till `tools\` (kontrollsummorna kontrolleras), och packar scriptet, verktygen, licenstexterna och README i `rapportkit-bundle.zip` med en `.sha256`-fil. Packa upp zippen på den andra datorn och kör `.\Run-Rapportkit.ps1 -Offline`.
 
 ```powershell
 .\Build-Bundle.ps1                  # med installers (~300 MB)
