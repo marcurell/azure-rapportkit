@@ -283,7 +283,7 @@
     'nodetype.bastionhosts' = 'Bastion'
     'nodetype.applicationgateways' = 'Application Gateway'
 
-    'anon.banner.html' = '<b>Anonymized version.</b> Names, e-mail addresses and IDs are replaced by aliases (for example "{0}"), and the tools'' own reports are not included. Texts that the anonymization did not catch, for example custom policy names and tag values, may remain: read it through before sharing.'
+    'anon.banner.html' = '<b>Anonymized version.</b> Names, e-mail addresses and IDs are replaced by aliases (for example "{0}"), and the tools'' own reports are not included. Texts that the anonymization did not catch, for example tag values, may remain: read it through before sharing.'
     'anon.notIncluded' = 'not included in the anonymized version'
     'anon.user' = 'User'
     'anon.group' = 'Group'
@@ -300,6 +300,7 @@
     'anon.subscription' = 'Subscription'
     'anon.rg' = 'Resource group'
     'anon.resource' = 'Resource'
+    'anon.customPolicy' = 'Custom policy'
     'anon.vnet' = 'VNet'
     'anon.node' = 'Network node'
     'anon.host' = 'Computer'

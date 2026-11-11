@@ -314,7 +314,7 @@ Describe 'Zip av resultatmappen' {
         $open | Should -BeGreaterThan 0
         $open | Should -BeLessThan $zipStart
         ([regex]::Matches($code, 'Start-Process \$reportPath')).Count | Should -Be 1
-        ([regex]::Matches($code, 'New-ResultZip \$RunDir \S+ \$zipProgress')).Count | Should -Be 2
+        ([regex]::Matches($code, 'New-ResultZip \$zipSource \S+ \$zipProgress')).Count | Should -Be 2
     }
     It 'läser en fil som något annat håller öppen för skrivning' {
         $busy = Join-Path $script:Run 'rapportkit.log'
@@ -325,6 +325,37 @@ Describe 'Zip av resultatmappen' {
             Test-Zip $zip 'rapportkit.log' | Should -BeTrue
         }
         finally { $h.Dispose() }
+    }
+}
+
+Describe 'Anonymiserad körning (-Anonymize) lämnar bara den anonyma rapporten' {
+    BeforeAll { $script:Src = Get-Content $script:ScriptPath -Raw -Encoding UTF8 }
+    It 'frågar efter anonymisering innan resultatmappen väljs, så att arbetsmappen kan vara tillfällig' {
+        $ask = $script:Src.IndexOf('Do you want an ANONYMIZED report')
+        $run = $script:Src.IndexOf('$RunDir = Join-Path $OutputRoot $Period')
+        $ask | Should -BeGreaterThan 0
+        $run | Should -BeGreaterThan $ask
+        $script:Src | Should -Not -Match 'Do you also want to create an anonymized version'
+    }
+    It 'kör verktygen i en tillfällig mapp och sparar bara den anonyma mappen (men rör inte en tidigare körning med -ReportOnly)' {
+        $script:Src | Should -Match '\$AnonOutDir = Join-Path \$OutputRoot "\$Period-anonym"'
+        $script:Src | Should -Match 'if \(-not \$ReportOnly\) \{ \$RunDir = Join-Path \(\[System\.IO\.Path\]::GetTempPath\(\)\)'
+    }
+    It 'tar bort arbetsmappen först efter att den anonyma rapporten och zippen finns, och bara om rapporten byggdes' {
+        $zip = $script:Src.IndexOf('New-ResultZip $zipSource $zipPath $zipProgress')
+        $del = $script:Src.IndexOf('Remove-Item -LiteralPath $RunDir -Recurse -Force -ErrorAction Stop')
+        $zip | Should -BeGreaterThan 0
+        $del | Should -BeGreaterThan $zip
+        $script:Src | Should -Match 'if \(\$Anonymize -and \$WorkDirIsTemp -and -not \$anonFailed\)'
+    }
+    It 'zippar den anonyma mappen, utan någon del av tenant-ID i filnamnet och utan varning om okrypterad zip' {
+        $script:Src | Should -Match '\$zipSource = if \(\$Anonymize\) \{ \$AnonOutDir \} else \{ \$RunDir \}'
+        $script:Src | Should -Match "rapportkit_anonym_\{0\}\.zip"
+        $script:Src | Should -Match 'if \(-not \$Anonymize\) \{ Add-Warning ''The zip file is NOT encrypted'
+        $script:Src | Should -Match 'if \(\$Anonymize -and -not \$ZipPassword\) \{ \$NoEncrypt'
+    }
+    It 'säger var arbetsmappen finns om körningen avbröts eller byggdes fel' {
+        ([regex]::Matches($script:Src, 'Write-WorkDirNote')).Count | Should -BeGreaterOrEqual 3
     }
 }
 

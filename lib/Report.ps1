@@ -881,27 +881,33 @@ function Write-ReportSite {
         catch { Add-Warning "The report page '$key' could not be built: $($_.Exception.Message)"; $content[$key] = New-NoDataHtml (T 'page.buildFailed') $_.Exception.Message }
     }
     $index = $null
-    foreach ($p in $pages) {
-        $html = New-ReportPageHtml $ctx $p.Key $p.Title $p.Lead $content[$p.Key]
-        $path = Join-Path $RunDir $p.File
-        Set-Content -LiteralPath $path -Value $html -Encoding utf8
-        if ($p.Key -eq 'oversikt') { $index = $path }
+    # With -Anonymize the plain report is never written: only the anonymized pages are (below), so that nothing with real names is left.
+    if (-not $Anonymize) {
+        foreach ($p in $pages) {
+            $html = New-ReportPageHtml $ctx $p.Key $p.Title $p.Lead $content[$p.Key]
+            $path = Join-Path $RunDir $p.File
+            Set-Content -LiteralPath $path -Value $html -Encoding utf8
+            if ($p.Key -eq 'oversikt') { $index = $path }
+        }
+        # All pages in one document (for PDF/print). Every section starts on a new page when printed.
+        try {
+            $all = ($pages | ForEach-Object { '<section class="rk-sec"><h1>{0}</h1><p class="rk-lead">{1}</p>{2}</section>' -f (Esc $_.Title), (Esc $_.Lead), $content[$_.Key] }) -join "`n"
+            $full = New-ReportPageHtml $ctx 'komplett' (T 'page.complete.title') (T 'page.complete.lead') $all
+            Set-Content -LiteralPath (Join-Path $RunDir 'rapport-komplett.html') -Value $full -Encoding utf8
+        }
+        catch { Add-Warning "The combined report (PDF version) could not be built: $($_.Exception.Message)" }
     }
-    # All pages in one document (for PDF/print). Every section starts on a new page when printed.
-    try {
-        $all = ($pages | ForEach-Object { '<section class="rk-sec"><h1>{0}</h1><p class="rk-lead">{1}</p>{2}</section>' -f (Esc $_.Title), (Esc $_.Lead), $content[$_.Key] }) -join "`n"
-        $full = New-ReportPageHtml $ctx 'komplett' (T 'page.complete.title') (T 'page.complete.lead') $all
-        Set-Content -LiteralPath (Join-Path $RunDir 'rapport-komplett.html') -Value $full -Encoding utf8
-    }
-    catch { Add-Warning "The combined report (PDF version) could not be built: $($_.Exception.Message)" }
 
-    # Anonymized version: separate pages in anonym\ where names, e-mail addresses and IDs are replaced by aliases.
+    # Anonymized version: pages where names, e-mail addresses and IDs are replaced by aliases, in $AnonOutDir (set by
+    # Run-Rapportkit.ps1; without it anonym\ in the result folder).
     if ($Anonymize) {
         try {
-            Write-Action 'Building the anonymized version (anonym\)'
+            $anonDir = if ($AnonOutDir) { $AnonOutDir } else { Join-Path $RunDir 'anonym' }
+            Write-Action "Building the anonymized report in $anonDir"
             Register-AnonData $d
-            $anonDir = Join-Path $RunDir 'anonym'
             New-Item -ItemType Directory -Force $anonDir | Out-Null
+            # An earlier anonymized run in the same folder must not leave pages behind.
+            Get-ChildItem -LiteralPath $anonDir -Filter 'rapport*.html' -File -ErrorAction SilentlyContinue | Remove-Item -Force
             $ctxA = @{ Theme = $theme; Pages = $pages; Css = $ctx.Css; LogoHtml = $ctx.LogoHtml; Anon = $true
                 Banner = (New-Callout (T 'anon.banner.html' ((Esc (T 'anon.user')) + ' 3'))) }
             $contentA = @{}
@@ -911,7 +917,7 @@ function Write-ReportSite {
             }
             $allA = ($pages | ForEach-Object { '<section class="rk-sec"><h1>{0}</h1><p class="rk-lead">{1}</p>{2}</section>' -f (Esc $_.Title), (Esc $_.Lead), $contentA[$_.Key] }) -join "`n"
             Set-Content -LiteralPath (Join-Path $anonDir 'rapport-komplett.html') -Value (New-ReportPageHtml $ctxA 'komplett' (T 'page.complete.title') (T 'page.complete.lead') $allA) -Encoding utf8
-            Write-Ok ('Anonymized report: {0}' -f (Join-Path $anonDir 'rapport.html'))
+            $index = Join-Path $anonDir 'rapport.html'
         }
         catch { Add-Warning "The anonymized version could not be built: $($_.Exception.Message)" }
     }

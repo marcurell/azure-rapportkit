@@ -76,8 +76,12 @@
 .PARAMETER NoZip
   Do not create a zip file of the result.
 .PARAMETER Anonymize
-  Also build an anonymized version of the report in the folder anonym\ (names, e-mail addresses and IDs are replaced by aliases), for
-  demos or sharing. If it is not given the script asks at the start (unless -Yes is set).
+  Anonymized run, safe to share: the result is ONLY an anonymized report (names, e-mail addresses, IDs and IP addresses replaced by
+  aliases) in <OutputRoot>\<Period>-anonym\, plus a zip of it. The tools run in a temporary working folder, and the plain report, the
+  tools' own reports (azqr, Governance Visualizer, Maester), the data files and the logs are deleted when the run is done. The zip is
+  not encrypted (there is nothing in it to protect) unless -ZipPassword is given. With -ReportOnly the results of an earlier run in
+  <OutputRoot>\<Period>\ are read and kept, and the anonymized report is built from them. If it is not given the script asks at the
+  start (unless -Yes is set).
 .PARAMETER ReportLanguage
   Language of the report text: the code of a language pack in the folder lang\ (en, sv). If it is not given, "language" in
   branding\theme.json is used, and if that is missing English (en). Applies to the report only; the script's own messages are in English.
@@ -152,7 +156,7 @@ $TotalSteps = 10
 # Governance Visualizer is fetched as a fixed version (the one that was tested). Changed on purpose, not by accident.
 $GvVersion = '6.7.2'
 $GvUrl = "https://github.com/Azure/Azure-Governance-Visualizer/archive/refs/tags/$GvVersion.zip"
-$KitVersion = '1.5.0'
+$KitVersion = '1.5.1'
 
 # Tested (pinned) tool versions, and checksums (SHA256) for the zip files that are fetched directly. The customer then gets
 # the same tools that we tested, and a changed file is detected. Tools installed via winget are checked by winget
@@ -945,7 +949,16 @@ if ($PSVersionTable.PSVersion.Major -lt 7) {
 # The run itself. Everything is in try/catch/finally so that an interruption always gives an
 # understandable message and the log is closed.
 # ===========================================================================
+# An anonymized run that stopped before the end leaves its working folder (real names, the tools' reports, the logs): say where it is.
+function Write-WorkDirNote {
+    if ($WorkDirIsTemp -and $RunDir -and (Test-Path -LiteralPath $RunDir)) {
+        Write-Host "  Note: the working files of the anonymized run contain real names and were NOT deleted: $RunDir" -ForegroundColor DarkYellow
+        Write-Host '  Send rapportkit.log from there to whoever gave you the script if you need help, and delete the folder when you are done.' -ForegroundColor DarkYellow
+    }
+}
 $TranscriptStarted = $false
+$AnonOutDir = $null          # anonymized run: the only result folder that is kept (see -Anonymize)
+$WorkDirIsTemp = $false      # anonymized run: RunDir is a temporary working folder that is deleted when the run is done
 try {
 
     # =======================================================================
@@ -979,8 +992,22 @@ try {
     $OutputRoot = Select-OutputRoot $OutputRoot
     $BoundParams['OutputRoot'] = $OutputRoot        # so that the "run again" command uses the same folder
 
+    # Anonymized run (for demos, sharing, or sending the report on): ONLY the anonymized report is kept. The tools' own reports
+    # (azqr, Governance Visualizer, Maester), the data files, the plain report and the logs all contain real names, so they are
+    # created in a temporary working folder that is deleted when the run is done. Only asked interactively; -Yes means "no" here.
+    if (-not $Anonymize -and -not $Yes) {
+        Write-Host ''
+        try { if (Read-YesNo 'Do you want an ANONYMIZED report (names, e-mail addresses and IDs replaced by aliases) that is safe to share? Then nothing else is kept: the plain report, the tools'' own reports and the logs are deleted when the run is done.' $false) { $Anonymize = [switch]$true; $BoundParams['Anonymize'] = [switch]$true } }
+        catch { }
+    }
+
     # Result folders: one per tool under <OutputRoot>\<Period>\, plus a module folder of our own.
     $RunDir = Join-Path $OutputRoot $Period
+    if ($Anonymize) {
+        $AnonOutDir = Join-Path $OutputRoot "$Period-anonym"
+        # -ReportOnly reads the results of an earlier run in <OutputRoot>\<Period>\ and keeps them (they are not ours to delete).
+        if (-not $ReportOnly) { $RunDir = Join-Path ([System.IO.Path]::GetTempPath()) ('rk-' + [guid]::NewGuid().ToString('N').Substring(0, 8)); $WorkDirIsTemp = $true }
+    }
     $ModDir = Join-Path $OutputRoot '_modules'
     $GvDir = Join-Path $OutputRoot "Azure-Governance-Visualizer-$GvVersion"
     $Dirs = @{}
@@ -996,11 +1023,17 @@ try {
     }
     catch { Fail "Cannot write to $OutputRoot ($($_.Exception.Message))." 'Choose another folder with -OutputRoot (for example C:\Users\<you>\rapportkit) and run again.' }
     if ($env:PSModulePath -notlike "*$ModDir*") { $env:PSModulePath = "$ModDir;$env:PSModulePath" }
-    Write-Ok "Result folder: $RunDir"
+    if ($Anonymize) {
+        Write-Ok "Anonymized result: $AnonOutDir (the only thing that is kept)"
+        if ($WorkDirIsTemp) { Write-Action "Working files with real names, deleted when the run is done: $RunDir" }
+    }
+    else { Write-Ok "Result folder: $RunDir" }
 
     # Password for the zip file: asked for right away, before the long run, so that a mistyped or too short password is not
     # discovered only afterwards. The question comes before the console log starts. The password is never saved in any file or log.
     # Encryption is optional: first a yes/no question (-Yes means yes), then the password. No gives an ordinary zip.
+    # An anonymized result contains nothing that needs protecting, so it is not encrypted unless a password is given with -ZipPassword.
+    if ($Anonymize -and -not $ZipPassword) { $NoEncrypt = [switch]$true }
     if (-not $NoZip -and -not $NoEncrypt -and -not $ZipPassword -and -not $Yes) {
         Write-Host ''
         $encrypt = $true
@@ -1029,13 +1062,6 @@ try {
         }
         elseif ((ConvertFrom-RkSecureString $ZipPassword).Length -lt $script:RkMinPasswordLength) { Fail "The password in -ZipPassword is too short (at least $($script:RkMinPasswordLength) characters)." 'Give a longer password.' }
         Write-Ok 'Password for the zip file is chosen'
-    }
-
-    # Anonymized version of the report (for demos or sharing). Only asked interactively; -Yes means "no" here.
-    if (-not $Anonymize -and -not $Yes) {
-        Write-Host ''
-        try { if (Read-YesNo 'Do you also want to create an anonymized version of the report (for demos or sharing, names and IDs are replaced by aliases)?' $false) { $Anonymize = [switch]$true; $BoundParams['Anonymize'] = [switch]$true } }
-        catch { }
     }
 
     # Logs: a clean log (rapportkit.log) and the whole console output including the tools' text (rapportkit-console.log).
@@ -1673,10 +1699,16 @@ try {
     if (-not (Test-Path -LiteralPath $reportLib)) { Fail 'lib\Report.ps1 is missing next to the script, so the report cannot be built.' 'Use the whole kit (the whole zip file, unpacked), not just Run-Rapportkit.ps1.' }
     . $reportLib
     $reportPath = Write-ReportSite
-    Write-Ok "Report: $reportPath"
+    # In an anonymized run the report is the anonymized one, and the plain report is never written.
+    $anonFailed = $false
+    if ($Anonymize -and (-not $reportPath -or -not (Test-Path -LiteralPath $reportPath))) {
+        $anonFailed = $true
+        Write-Warn2 'The anonymized report could not be built. Nothing is deleted and no zip is made: the working files contain real names.'
+    }
+    else { Write-Ok $(if ($Anonymize) { "Anonymized report: $reportPath" } else { "Report: $reportPath" }) }
     # The report opens now and not after the zip: in a large environment the zip takes minutes, and the report is already ready.
     # RAPPORTKIT_NOOPEN is used in automated tests so that no browser is started.
-    if (-not $env:RAPPORTKIT_NOOPEN) { try { Start-Process $reportPath } catch { } }
+    if (-not $anonFailed -and -not $env:RAPPORTKIT_NOOPEN) { try { Start-Process $reportPath } catch { } }
     # =======================================================================
     # Finish: run summary, zip for delivery, summary box, sign-out and cleanup.
     # =======================================================================
@@ -1694,9 +1726,11 @@ try {
         else { Write-Host ('     ... {0:N0} of {1:N0} files ({2} %)' -f $done, $total, [math]::Floor(100 * $done / $total)) -ForegroundColor DarkGray }
     }
     $zipClock = [System.Diagnostics.Stopwatch]::StartNew()
-    if (-not $NoZip) {
+    # An anonymized run zips the anonymized folder (the pages only) and names the file without any part of the tenant ID.
+    $zipSource = if ($Anonymize) { $AnonOutDir } else { $RunDir }
+    if (-not $NoZip -and -not $anonFailed) {
         try {
-            $zipPath = Join-Path $OutputRoot ('rapportkit_{0}_{1}.zip' -f $TenantId.Substring(0, 8), $Period)
+            $zipPath = if ($Anonymize) { Join-Path $OutputRoot ('rapportkit_anonym_{0}.zip' -f $Period) } else { Join-Path $OutputRoot ('rapportkit_{0}_{1}.zip' -f $TenantId.Substring(0, 8), $Period) }
             if ($ZipPassword) { $zipPath += '.rkenc' }
             if (Test-Path $zipPath) { Remove-Item $zipPath -Force }
             if ($ZipPassword) {
@@ -1704,7 +1738,7 @@ try {
                 $plainZip = Join-Path ([System.IO.Path]::GetTempPath()) ('rapportkit-' + [guid]::NewGuid().ToString('N') + '.zip')
                 $checkZip = "$plainZip.check"
                 try {
-                    New-ResultZip $RunDir $plainZip $zipProgress
+                    New-ResultZip $zipSource $plainZip $zipProgress
                     Write-Action 'Encrypting the zip file (AES-256)'
                     Protect-RapportkitFile -Path $plainZip -Destination $zipPath -Password $ZipPassword
                     Write-Action 'Checking the encrypted file (decrypting it again)'
@@ -1715,8 +1749,8 @@ try {
                 finally { Remove-Item $plainZip, $checkZip -Force -ErrorAction SilentlyContinue }
             }
             else {
-                Add-Warning 'The zip file is NOT encrypted (-NoEncrypt). Do not send it by e-mail.'
-                New-ResultZip $RunDir $zipPath $zipProgress
+                if (-not $Anonymize) { Add-Warning 'The zip file is NOT encrypted (-NoEncrypt). Do not send it by e-mail.' }
+                New-ResultZip $zipSource $zipPath $zipProgress
             }
             $zipHash = (Get-FileHash $zipPath -Algorithm SHA256).Hash
             Set-Content -Path "$zipPath.sha256" -Value ('{0} *{1}' -f $zipHash, (Split-Path $zipPath -Leaf)) -Encoding ascii
@@ -1725,19 +1759,46 @@ try {
         catch { Add-Warning "Could not create the zip file: $($_.Exception.Message)"; $zipPath = $null }
     }
 
+    # Anonymized run: delete the working folder (real names, the tools' own reports, the plain data and the logs). Only when the
+    # anonymized report exists, so that a failed build leaves the working files and the log to look at.
+    $workDeleted = $false
+    if ($Anonymize -and $WorkDirIsTemp -and -not $anonFailed) {
+        Write-Action 'Deleting the working files (they contain real names)'
+        if ($TranscriptStarted) { try { Stop-Transcript | Out-Null } catch { }; $TranscriptStarted = $false }
+        try { Remove-Item -LiteralPath $RunDir -Recurse -Force -ErrorAction Stop; $workDeleted = $true }
+        catch { Write-Warn2 "Could not delete all the working files ($($_.Exception.Message)). Delete the folder yourself: $RunDir" }
+    }
+
     $facts = [System.Collections.Generic.List[object]]::new()
-    $facts.Add(@('Report', $reportPath))
-    $facts.Add(@('Result folder', $RunDir))
-    if ($Anonymize -and (Test-Path (Join-Path $RunDir 'anonym\rapport.html'))) { $facts.Add(@('Anonymized report', (Join-Path $RunDir 'anonym\rapport.html'))) }
+    if ($Anonymize) {
+        if (-not $anonFailed) { $facts.Add(@('Anonymized', $reportPath)) }
+        $facts.Add(@('Result folder', $AnonOutDir))
+    }
+    else {
+        $facts.Add(@('Report', $reportPath))
+        $facts.Add(@('Result folder', $RunDir))
+    }
     if ($zipPath) { $facts.Add(@($(if ($ZipPassword) { 'Encrypted zip' } else { 'Zip' }), $zipPath)); $facts.Add(@('SHA256', $zipHash)) }
-    $facts.Add(@('Logs', 'rapportkit.log (cleaned), rapportkit-console.log (everything) and run-summary.json in the result folder'))
+    if ($Anonymize) {
+        $facts.Add(@('Logs', $(if ($workDeleted) { 'none kept (they contain real names)' }
+                    elseif ($WorkDirIsTemp) { "in the working folder $RunDir (contains real names)" }
+                    else { "in $RunDir, the folder of the earlier run (contains real names)" })))
+    }
+    else { $facts.Add(@('Logs', 'rapportkit.log (cleaned), rapportkit-console.log (everything) and run-summary.json in the result folder')) }
     $facts.Add(@('Total time', (Format-Duration ((Get-Date) - $script:RunStart).TotalSeconds)))
     if ($anyFail) { $facts.Add(@('Run again', (Get-RerunCommand))) }
     Write-SummaryBox $Status $facts
     if ($anyFail) { Write-Warn2 'A tool failed (see above). The report shows what went well. Fix the problem and run again with the command above.' }
     Write-Host ''
-    Write-Action 'Next step: open the report and check the content. The result is confidential: leave it only in an agreed place.'
-    if ($zipPath -and $ZipPassword) { Write-Action 'Send the encrypted file (.rkenc) and the .sha256 file, and give the recipient the password by another channel than the file. The folder with unencrypted results stays on the computer: delete it when the assignment is done.' }
+    if ($Anonymize -and -not $anonFailed -and $WorkDirIsTemp) {
+        Write-Action 'The anonymized report is the only result that was kept: the plain report, the tools'' own reports (azqr, Governance Visualizer, Maester) and the logs are gone. Read it through before you share it: the anonymization replaces names, e-mail addresses, IDs and IP addresses, but free text such as tag values can remain. Save it as PDF with the button on the page, or share the zip.'
+    }
+    elseif ($Anonymize -and -not $anonFailed) {
+        Write-Action "The anonymized report was built from the earlier run in $RunDir. That folder (the tools' reports, the data and the logs) was not touched and still contains real names: only $AnonOutDir and its zip are safe to share. Read the report through before you share it."
+    }
+    elseif (-not $Anonymize) { Write-Action 'Next step: open the report and check the content. The result is confidential: leave it only in an agreed place.' }
+    if ($Anonymize -and $anonFailed) { Write-Warn2 "The working files with real names are in $RunDir. Send rapportkit.log from there to whoever gave you the script, and delete the folder when you are done." }
+    if ($zipPath -and $ZipPassword -and -not $Anonymize) { Write-Action 'Send the encrypted file (.rkenc) and the .sha256 file, and give the recipient the password by another channel than the file. The folder with unencrypted results stays on the computer: delete it when the assignment is done.' }
 
     Invoke-SessionCleanup
     foreach ($tmpf in @((Join-Path $env:TEMP 'azqr.zip'), (Join-Path $env:TEMP "azgovviz-$GvVersion.zip"))) { Remove-Item $tmpf -Force -ErrorAction SilentlyContinue }
@@ -1771,6 +1832,7 @@ catch {
     Write-Line 'RERUN' 'Cyan' 'When it is fixed, run the script again (what is already installed is reused):' 'Gray'
     Write-Host "             $(Get-RerunCommand)" -ForegroundColor White
     Write-RunSummary 1
+    Write-WorkDirNote
 }
 finally {
     # Always runs, also on Ctrl+C or a closed window: explain the interruption, clean up and close the log.
@@ -1784,6 +1846,7 @@ finally {
             Write-Host "             $(Get-RerunCommand)" -ForegroundColor White
         }
         Write-RunSummary 1
+        Write-WorkDirNote
     }
     if (-not $Completed -and ($azPsByUs -or $graphByUs -or ($azReady -and -not $azWasLoggedIn))) {
         Write-Host '  Note: sign-ins that the script created may remain. Sign out with: az logout   (and Disconnect-AzAccount and Disconnect-MgGraph)' -ForegroundColor DarkYellow

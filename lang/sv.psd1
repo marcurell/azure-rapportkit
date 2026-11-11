@@ -283,7 +283,7 @@
     'nodetype.bastionhosts' = 'Bastion'
     'nodetype.applicationgateways' = 'Application Gateway'
 
-    'anon.banner.html' = '<b>Anonymiserad version.</b> Namn, e-postadresser och ID:n är ersatta med alias (till exempel "{0}"), och verktygens egna rapporter ingår inte. Texter som inte fångats av anonymiseringen, till exempel egna policynamn och taggvärden, kan finnas kvar: läs igenom innan delning.'
+    'anon.banner.html' = '<b>Anonymiserad version.</b> Namn, e-postadresser och ID:n är ersatta med alias (till exempel "{0}"), och verktygens egna rapporter ingår inte. Texter som inte fångats av anonymiseringen, till exempel taggvärden, kan finnas kvar: läs igenom innan delning.'
     'anon.notIncluded' = 'ingår inte i den anonyma versionen'
     'anon.user' = 'Användare'
     'anon.group' = 'Grupp'
@@ -300,6 +300,7 @@
     'anon.subscription' = 'Prenumeration'
     'anon.rg' = 'Resursgrupp'
     'anon.resource' = 'Resurs'
+    'anon.customPolicy' = 'Egen policy'
     'anon.vnet' = 'VNet'
     'anon.node' = 'Nätverksnod'
     'anon.host' = 'Dator'

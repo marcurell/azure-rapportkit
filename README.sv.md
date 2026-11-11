@@ -23,10 +23,10 @@ Scriptet **skriver inget i Azure-resurser eller i Entra-konfigurationen**. Det g
 $dest = Join-Path $env:USERPROFILE 'rapportkit-kit'
 $zip  = Join-Path $env:TEMP 'azure-rapportkit.zip'
 New-Item -ItemType Directory -Force $dest | Out-Null
-Invoke-WebRequest 'https://github.com/marcurell/azure-rapportkit/archive/refs/tags/v1.5.0.zip' -OutFile $zip
+Invoke-WebRequest 'https://github.com/marcurell/azure-rapportkit/archive/refs/tags/v1.5.1.zip' -OutFile $zip
 Expand-Archive $zip $dest -Force
 Get-ChildItem $dest -Recurse | Unblock-File
-$script = Join-Path $dest 'azure-rapportkit-1.5.0\Run-Rapportkit.ps1'
+$script = Join-Path $dest 'azure-rapportkit-1.5.1\Run-Rapportkit.ps1'
 $arg = '-NoExit -ExecutionPolicy Bypass -File "' + $script + '"'
 Start-Process powershell -ArgumentList $arg
 ```
@@ -110,16 +110,23 @@ Se [branding/README.md](branding/README.md) för filerna och fälten i `theme.js
 
 ## Anonymiserad rapport
 
-Scriptet frågar i början: "Vill du även skapa en anonymiserad version av rapporten?" (eller använd `-Anonymize`; `-Yes` betyder nej). Då byggs en andra uppsättning sidor i `anonym\` bredvid den vanliga rapporten, avsedd för demo, utbildning eller delning:
+Välj det här när resultatet ska visas eller skickas vidare: scriptet frågar i början ("Vill du ha en ANONYMISERAD rapport ... säker att dela?", eller använd `-Anonymize`; `-Yes` betyder nej). En anonymiserad körning sparar **bara den anonymiserade rapporten**:
+
+- verktygen körs i en tillfällig arbetsmapp, och när körningen är klar raderas allt med riktiga namn: den vanliga rapporten, verktygens egna rapporter (azqr, Governance Visualizer, Maester), datafilerna, `run-summary.json` och loggarna,
+- kvar blir `<resultatmapp>\<år-månad>-anonym\` (öppna `rapport.html`; knappen "Spara hela rapporten som PDF" ger en PDF) och en zip av den, `rapportkit_anonym_<år-månad>.zip`. Zippen har ingen del av tenant-ID:t i namnet och är inte krypterad (det finns inget i den att skydda; ange `-ZipPassword` om du vill ha den krypterad ändå),
+- avbryts körningen halvvägs, eller går det inte att bygga den anonyma rapporten, blir arbetsmappen kvar (där finns loggen) och scriptet säger var den ligger. Den innehåller riktiga namn: ta bort den när du är klar.
+
+Det som byts ut i rapporten:
 
 - användare, grupper, tjänsteprinciper, prenumerationer, management groups, resursgrupper och resurser byts mot alias som "Användare 3" och "Prenumeration 1" (samma namn får alltid samma alias),
-- alla GUID, e-postadresser och `*.onmicrosoft.com`-adresser byts ut, även sådana som inte samlats in,
+- namnet på en policytilldelning byts mot namnet på den inbyggda policyn den tilldelar (offentlig text), och en egen policy får ett alias som "Egen policy 1",
+- alla GUID, e-postadresser, `*.onmicrosoft.com`-adresser och IP-adresser byts ut, även sådana som inte samlats in,
 - dator, konto och sökvägar på sidan Om körningen döljs,
-- länkar till verktygens egna rapporter tas bort (de innehåller riktiga namn).
+- länkar till verktygens egna rapporter tas bort (och rapporterna raderas).
 
-**Begränsning:** fritext som inte ligger i de insamlade kolumnerna (egna policynamn, taggvärden, namn kortare än 4 tecken) byts inte ut. Läs igenom den anonyma versionen innan den delas. Det finns ingen nyckel som kopplar alias till riktiga namn; kör om rapporten om du behöver slå upp något. Rådatan i `azgovviz\`, `azqr\`, `maester\` och `portal\` anonymiseras inte, och den anonyma mappen ingår i det krypterade paketet som vanligt. Dela alltså bara mappen `anonym\`.
+**Begränsning:** fritext som inte ligger i de insamlade kolumnerna (taggvärden, namn kortare än 4 tecken) byts inte ut. Läs igenom rapporten innan den delas. Det finns ingen nyckel som kopplar alias till riktiga namn; kör verktygen igen om du behöver slå upp något.
 
-Bygg om en anonym version av en gammal körning utan att köra verktygen igen: `.\Run-Rapportkit.ps1 -ReportOnly -Anonymize -Period 2026-10`.
+Med `-ReportOnly -Anonymize -Period 2026-10` byggs den anonymiserade rapporten av resultatet från en tidigare körning i `<resultatmapp>\2026-10\`. Den mappen lämnas som den är (den innehåller fortfarande riktiga namn): dela bara `-anonym`-mappen och dess zip.
 
 ## Behörigheter
 
@@ -169,7 +176,7 @@ Har kontot bara åtkomst till en subscription faller Governance Visualizer på b
 | `-MaxPortalSubscriptions <n>` | Högst så många aktiva prenumerationer hämtas Defender- och kostnadsdata för (standard 25) |
 | `-OutputRoot <mapp>` | Resultatmapp. Anges den inte frågar scriptet |
 | `-Period <namn>` | Namn på undermappen för körningen (standard: innevarande månad, `yyyy-MM`) |
-| `-Anonymize` | Bygg även en anonymiserad version av rapporten i `anonym\` (namn, e-post och ID:n byts mot alias). Utan flaggan frågar scriptet i början |
+| `-Anonymize` | Anonymiserad körning: bara en anonymiserad rapport sparas (i `<år-månad>-anonym\` och en zip); den vanliga rapporten, verktygens egna rapporter och loggarna raderas. Utan flaggan frågar scriptet i början |
 | `-HidePersonalData` | Dölj namn och e-postadresser i Governance Visualizers rapport (Maesters rapport kan ändå innehålla namn) |
 | `-KeepLogin` | Logga inte ut från sessioner som scriptet skapade |
 | `-NoZip` | Skapa ingen zip av resultatet |

@@ -328,9 +328,9 @@ Describe 'Anonymisering' {
         $script:Status = [ordered]@{ azqr = @{ State = 'OK'; Note = '' } }
         $script:RunStart = Get-Date
         $script:BrandingDir = Join-Path $script:ScriptRoot 'branding-exempel\neutral'
-        $script:Anonymize = $true
         $script:Warnings.Clear()
-        Write-ReportSite | Out-Null
+        $script:Anonymize = $false; Write-ReportSite | Out-Null     # the plain report, to compare with
+        $script:Anonymize = $true; Write-ReportSite | Out-Null      # the anonymized pages (anonym\ when $AnonOutDir is not set)
     }
     AfterAll { $script:Anonymize = $false; $script:BrandingDir = $null }
 
@@ -373,6 +373,75 @@ Describe 'Anonymisering' {
     }
 }
 
+Describe 'Anonymiserat läge: bara anonyma sidor' {
+    BeforeAll {
+        $script:RunDir = Join-Path $TestDrive 'anonmode'
+        $script:AnonOutDir = Join-Path $TestDrive 'anonmode-ut'
+        $script:Dirs = @{}
+        foreach ($n in 'azqr', 'azgovviz', 'maester', 'portal') { $script:Dirs[$n] = Join-Path $script:RunDir $n; New-Item -ItemType Directory -Force $script:Dirs[$n] | Out-Null }
+        "Validated Using,Source,Category,Impact,Resource Type,Recommendation,Recommendation Id,Subscription Id,Subscription Name,Resource Group,Resource Name`
+ARG,APRL,Security,High,Microsoft.Web/sites,Använd HTTPS,r1,11111111-2222-3333-4444-555555555555,Kundbolaget Produktion,rg-hemlig,app-kundnamn-01" | Set-Content (Join-Path $script:Dirs.azqr 'azqr_x.impacted.csv') -Encoding utf8
+        "Subscription Id,Resource Group,Location,Resource Type,Resource Name`
+11111111-2222-3333-4444-555555555555,rg-hemlig,westeurope,microsoft.web/sites,app-kundnamn-01" | Set-Content (Join-Path $script:Dirs.azqr 'azqr_x.inventory.csv') -Encoding utf8
+        $script:TenantId = 'aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee'; $script:Period = '2026-10'
+        $script:KitVersion = 'test'; $script:Pins = @{ Azqr = '1'; Maester = '1'; Pester = '1'; AzAccounts = '1' }; $script:GvVersion = '6'
+        $script:HidePersonalData = $false; $script:LatestTools = $false
+        $script:Status = [ordered]@{ azqr = @{ State = 'OK'; Note = '' } }
+        $script:RunStart = Get-Date
+        $script:BrandingDir = Join-Path $script:ScriptRoot 'branding-exempel\neutral'
+        # An anonymized run from earlier in the same folder must not leave pages behind
+        New-Item -ItemType Directory -Force $script:AnonOutDir | Out-Null
+        'GAMMAL SIDA med Kundbolaget' | Set-Content (Join-Path $script:AnonOutDir 'rapport-gammal.html') -Encoding utf8
+        $script:Anonymize = $true
+        $script:Warnings.Clear()
+        $script:Index = Write-ReportSite
+    }
+    AfterAll { $script:Anonymize = $false; $script:AnonOutDir = $null; $script:BrandingDir = $null }
+
+    It 'skriver bara de anonyma sidorna, i den anonyma mappen, och ger startsidan därifrån' {
+        $script:Index | Should -Be (Join-Path $script:AnonOutDir 'rapport.html')
+        foreach ($f in 'rapport.html', 'rapport-struktur.html', 'rapport-styrning.html', 'rapport-resurser.html', 'rapport-entra.html', 'rapport-defender-kostnad.html', 'rapport-om.html', 'rapport-komplett.html') {
+            Test-Path (Join-Path $script:AnonOutDir $f) | Should -BeTrue -Because $f
+        }
+    }
+    It 'skriver ingen vanlig rapport och ingen anonym-mapp i arbetsmappen' {
+        @(Get-ChildItem $script:RunDir -Filter 'rapport*.html' -ErrorAction SilentlyContinue).Count | Should -Be 0
+        Test-Path (Join-Path $script:RunDir 'anonym') | Should -BeFalse
+    }
+    It 'tar bort sidor från en tidigare anonym körning' {
+        Test-Path (Join-Path $script:AnonOutDir 'rapport-gammal.html') | Should -BeFalse
+    }
+    It 'har inga namn eller ID:n i någon sida' {
+        foreach ($f in Get-ChildItem $script:AnonOutDir -File) {
+            $h = [System.Web.HttpUtility]::HtmlDecode((Get-Content $f.FullName -Raw))
+            $h | Should -Not -Match 'app-kundnamn-01|rg-hemlig|Kundbolaget|aaaaaaaa-bbbb|11111111-2222' -Because $f.Name
+        }
+    }
+}
+
+Describe 'Anonymisering av policynamn' {
+    BeforeAll {
+        $script:Warnings.Clear()
+        [void](Initialize-Language 'sv')
+        $script:GvPol = @(
+            [pscustomobject]@{ PolicyAssignmentDisplayName = 'Kundbolaget: kräv taggar'; PolicyNameClear = 'Require a tag on resource groups'; PolicyType = 'BuiltIn' },
+            [pscustomobject]@{ PolicyAssignmentDisplayName = 'Kundbolaget: egen policy'; PolicyNameClear = 'Kundbolaget egen definition'; PolicyType = 'Custom' },
+            [pscustomobject]@{ PolicyAssignmentDisplayName = 'Allowed locations'; PolicyNameClear = 'Allowed locations'; PolicyType = 'BuiltIn' }
+        )
+        Register-AnonData @{ GvPolicies = $script:GvPol }
+        $script:A = [System.Web.HttpUtility]::HtmlDecode((ConvertTo-AnonymousHtml '<td>Kundbolaget: kräv taggar</td><td>Kundbolaget: egen policy</td><td>Kundbolaget egen definition</td><td>Allowed locations</td>'))
+    }
+    It 'byter namn som någon valt mot definitionens namn (offentlig text) för inbyggda policyer' {
+        $script:A | Should -Match 'Require a tag on resource groups'
+        $script:A | Should -Not -Match 'kräv taggar'
+    }
+    It 'ger egna policyer ett alias och låter oförändrade inbyggda namn vara' {
+        $script:A | Should -Not -Match 'Kundbolaget|egen definition'
+        $script:A | Should -Match 'Egen policy 1'
+        $script:A | Should -Match 'Allowed locations'
+    }
+}
+
 Describe 'Sidan Struktur' {
     BeforeAll {
         $script:RunDir = Join-Path $TestDrive 'struk'
@@ -410,9 +479,9 @@ Describe 'Sidan Struktur' {
         $script:Status = [ordered]@{}
         $script:RunStart = Get-Date
         $script:BrandingDir = Join-Path $script:ScriptRoot 'branding-exempel\neutral'
-        $script:Anonymize = $true
         $script:Warnings.Clear()
-        Write-ReportSite | Out-Null
+        $script:Anonymize = $false; Write-ReportSite | Out-Null     # the plain report, to compare with
+        $script:Anonymize = $true; Write-ReportSite | Out-Null      # the anonymized pages (anonym\ when $AnonOutDir is not set)
     }
     AfterAll { $script:Anonymize = $false; $script:BrandingDir = $null }
 

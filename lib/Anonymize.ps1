@@ -1,8 +1,8 @@
 ﻿<#
   Anonymization of the report pages (for demos, training or sharing).
 
-  The normal report is never changed. With -Anonymize (or the answer "yes" to the question at the start) a second set of
-  pages is built in the folder anonym\ where names, e-mail addresses and IDs are replaced by aliases.
+  With -Anonymize (or the answer "yes" to the question at the start) the report is built with names, e-mail addresses and
+  IDs replaced by aliases, and it is the ONLY report that is written: Run-Rapportkit.ps1 deletes everything else of the run.
 
   How it works:
     1. Names are collected from the tool results (users, groups, service principals, subscriptions, management groups,
@@ -12,8 +12,8 @@
     3. After that all GUIDs, e-mail addresses and *.onmicrosoft.com addresses are replaced, also those that were not collected.
     4. Links to the tools' own reports are removed (they contain real names and are not part of the anonymous version).
 
-  Limitations (stated in the report): free text outside the collected columns, for example custom policy names, tag
-  values and names shorter than 4 characters, is not replaced. Read through the anonymous version before sharing it.
+  Limitations (stated in the report): free text outside the collected columns, for example tag values and names shorter
+  than 4 characters, is not replaced. Read through the anonymous version before sharing it.
 #>
 
 $script:Anon = $null
@@ -82,6 +82,20 @@ function Register-AnonData($d) {
     & $col $d.GvRoles @('RoleAssignmentScopeRes') 'res' (T 'anon.resource')
     & $col $d.GvPolicies @('MgName', 'MgParentName') 'mg' (T 'anon.mg')
     & $col $d.GvPolicies @('subscriptionName') 'sub' (T 'anon.subscription')
+    # The name of a policy assignment is chosen by whoever made it and can carry a company or project name, and so can a custom
+    # definition. An assignment of a built-in policy shows the name of the definition instead (public text, so just as readable);
+    # one of a custom policy gets an alias.
+    foreach ($r in @($d.GvPolicies)) {
+        if ($null -eq $r -or $r.PSObject.Properties.Name -notcontains 'PolicyAssignmentDisplayName') { continue }
+        $assignment = [string]$r.PolicyAssignmentDisplayName
+        $definition = if ($r.PSObject.Properties.Name -contains 'PolicyNameClear') { [string]$r.PolicyNameClear } else { '' }
+        $custom = $r.PSObject.Properties.Name -contains 'PolicyType' -and [string]$r.PolicyType -eq 'Custom'
+        if ($custom) {
+            $alias = Add-AnonValue 'policy' (T 'anon.customPolicy') $definition
+            if ($assignment -and $assignment -ne $definition) { [void](Add-AnonValue 'policy' (T 'anon.customPolicy') $assignment $alias) }
+        }
+        elseif ($assignment -and $definition -and $assignment -ne $definition) { [void](Add-AnonValue 'policy' (T 'anon.customPolicy') $assignment $definition) }
+    }
     & $col $d.GvSubs @('Subscription') 'sub' (T 'anon.subscription')
     foreach ($r in @($d.GvSubs)) { if ($r -and $r.ManagementGroupPath) { foreach ($seg in ([string]$r.ManagementGroupPath -split '[/>|]')) { [void](Add-AnonValue 'mg' (T 'anon.mg') $seg) } } }
     & $col $d.GvResources @('subscriptionName') 'sub' (T 'anon.subscription')

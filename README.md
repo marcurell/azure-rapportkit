@@ -23,10 +23,10 @@ Open PowerShell or PowerShell ISE and paste the block below. It downloads the co
 $dest = Join-Path $env:USERPROFILE 'rapportkit-kit'
 $zip  = Join-Path $env:TEMP 'azure-rapportkit.zip'
 New-Item -ItemType Directory -Force $dest | Out-Null
-Invoke-WebRequest 'https://github.com/marcurell/azure-rapportkit/archive/refs/tags/v1.5.0.zip' -OutFile $zip
+Invoke-WebRequest 'https://github.com/marcurell/azure-rapportkit/archive/refs/tags/v1.5.1.zip' -OutFile $zip
 Expand-Archive $zip $dest -Force
 Get-ChildItem $dest -Recurse | Unblock-File
-$script = Join-Path $dest 'azure-rapportkit-1.5.0\Run-Rapportkit.ps1'
+$script = Join-Path $dest 'azure-rapportkit-1.5.1\Run-Rapportkit.ps1'
 $arg = '-NoExit -ExecutionPolicy Bypass -File "' + $script + '"'
 Start-Process powershell -ArgumentList $arg
 ```
@@ -112,16 +112,23 @@ See [branding/README.md](branding/README.md) for the files and the fields in `th
 
 ## Anonymized report
 
-The script asks at the start: "Do you also want to create an anonymized version of the report?" (or use `-Anonymize`; `-Yes` means no). A second set of pages is then built in `anonym\` next to the ordinary report, meant for demos, training or sharing:
+Choose this when the result is to be shown or sent on: the script asks at the start ("Do you want an ANONYMIZED report ... safe to share?", or use `-Anonymize`; `-Yes` means no). An anonymized run keeps **only the anonymized report**:
+
+- the tools run in a temporary working folder, and when the run is done everything with real names is deleted: the plain report, the tools' own reports (azqr, Governance Visualizer, Maester), the data files, `run-summary.json` and the logs,
+- what is left is `<result folder>\<year-month>-anonym\` (open `rapport.html`; the button "Save the whole report as PDF" gives a PDF) and a zip of it, `rapportkit_anonym_<year-month>.zip`. The zip has no part of the tenant ID in its name and is not encrypted (there is nothing in it to protect; give `-ZipPassword` if you want it encrypted anyway),
+- if the run stops halfway or the anonymized report cannot be built, the working folder is left (it holds the log) and the script says where it is. It contains real names: delete it when you are done.
+
+What is replaced in the report:
 
 - users, groups, service principals, subscriptions, management groups, resource groups and resources are replaced by aliases such as "User 3" and "Subscription 1" (the same name always gets the same alias),
-- all GUIDs, e-mail addresses and `*.onmicrosoft.com` addresses are replaced, also ones that were not collected,
+- the name of a policy assignment is replaced by the name of the built-in policy it assigns (public text), and a custom policy gets an alias such as "Custom policy 1",
+- all GUIDs, e-mail addresses, `*.onmicrosoft.com` addresses and IP addresses are replaced, also ones that were not collected,
 - computer, account and paths on the About page are hidden,
-- links to the tools' own reports are removed (they contain real names).
+- links to the tools' own reports are removed (and the reports are deleted).
 
-**Limitation:** free text outside the collected columns (custom policy names, tag values, names shorter than 4 characters) is not replaced. Read through the anonymous version before it is shared. There is no key that links aliases to real names; run the report again if you need to look something up. The raw data in `azgovviz\`, `azqr\`, `maester\` and `portal\` is not anonymized, and the anonymous folder is part of the encrypted package as usual. So share only the folder `anonym\`.
+**Limitation:** free text outside the collected columns (tag values, names shorter than 4 characters) is not replaced. Read the report through before it is shared. There is no key that links aliases to real names; run the tools again if you need to look something up.
 
-Rebuild an anonymous version of an old run without running the tools again: `.\Run-Rapportkit.ps1 -ReportOnly -Anonymize -Period 2026-10`.
+With `-ReportOnly -Anonymize -Period 2026-10` the anonymized report is built from the results of an earlier run in `<result folder>\2026-10\`. That folder is kept as it is (it still holds real names): share only the `-anonym` folder and its zip.
 
 ## Permissions
 
@@ -171,7 +178,7 @@ If the account only has access to one subscription Governance Visualizer fails t
 | `-MaxPortalSubscriptions <n>` | At most this many active subscriptions are queried for Defender and cost data (default 25) |
 | `-OutputRoot <folder>` | Result folder. If it is not given the script asks |
 | `-Period <name>` | Name of the subfolder for the run (default: the current month, `yyyy-MM`) |
-| `-Anonymize` | Also build an anonymized version of the report in `anonym\` (names, e-mail and IDs are replaced by aliases). Without the switch the script asks at the start |
+| `-Anonymize` | Anonymized run: only an anonymized report is kept (in `<year-month>-anonym\` and a zip); the plain report, the tools' own reports and the logs are deleted. Without the switch the script asks at the start |
 | `-HidePersonalData` | Hide names and e-mail addresses in Governance Visualizer's report (Maester's report can still contain names) |
 | `-KeepLogin` | Do not sign out of sessions that the script created |
 | `-NoZip` | Do not create a zip of the result |
