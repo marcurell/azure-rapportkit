@@ -12,7 +12,7 @@
 .PARAMETER Language
   Language of the report text in the bundle (en, sv). Written as "language" in branding\theme.json in the bundle. Default: the language in branding\theme.json, else English.
 .PARAMETER SkipInstallers
-  Skip the large installer files (PowerShell 7, Azure CLI, Git) if the computer already has them.
+  Skip the large installer files (PowerShell 7, Azure CLI) if the computer already has them.
 #>
 [CmdletBinding()]
 param(
@@ -70,7 +70,7 @@ function Get-File($url, $dest, [long]$minBytes = 1024) {
 function Assert-Zip($path, $mustContain) {
     Add-Type -AssemblyName System.IO.Compression.FileSystem
     $z = [System.IO.Compression.ZipFile]::OpenRead($path)
-    try { if (-not ($z.Entries | Where-Object { $_.FullName -like $mustContain })) { throw "$path saknar $mustContain" } }
+    try { if (-not ($z.Entries | Where-Object { $_.FullName -like $mustContain })) { throw "$path does not contain $mustContain" } }
     finally { $z.Dispose() }
 }
 
@@ -91,7 +91,7 @@ Get-File "https://github.com/Azure/Azure-Governance-Visualizer/archive/refs/tags
 Assert-Zip "$tools\AzGovViz.zip" '*pwsh/AzGovVizParallel.ps1'
 Assert-Sha "$tools\AzGovViz.zip" $GvSha 'Governance Visualizer'
 
-Write-Host 'PowerShell-moduler (fasta versioner)' -ForegroundColor Cyan
+Write-Host 'PowerShell modules (pinned versions)' -ForegroundColor Cyan
 foreach ($m in $modules) {
     $dest = Join-Path $tools "modules\$($m.N)"
     if (Test-Path $dest) { Remove-Item $dest -Recurse -Force }
@@ -108,9 +108,8 @@ foreach ($m in $modules) {
 
 if (-not $SkipInstallers) {
     Write-Host 'Installers' -ForegroundColor Cyan
+    # (Git is not needed: Governance Visualizer is fetched as a zip and run with -NoALZPolicyVersionChecker, the only part that uses git.)
     $a = Get-GhAsset 'PowerShell/PowerShell' 'PowerShell-*-win-x64.msi'
-    Get-File $a.browser_download_url "$tools\installers\$($a.name)" 10MB
-    $a = Get-GhAsset 'git-for-windows/git' 'Git-*-64-bit.exe'
     Get-File $a.browser_download_url "$tools\installers\$($a.name)" 10MB
     Get-File 'https://aka.ms/installazurecliwindowsx64' "$tools\installers\azure-cli-latest.msi" 10MB
 }

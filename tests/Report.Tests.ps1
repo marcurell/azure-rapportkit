@@ -1,16 +1,19 @@
 ﻿#Requires -Modules @{ ModuleName = 'Pester'; ModuleVersion = '5.0.0' }
 <#
-  Tester för rapportgeneratorn (lib\Report.ps1): tema, validering, länkar och sidbygge. Generatorn läses in med
-  dot-source och får stubbar för det den annars hämtar från huvudscriptet. Inga inloggningar eller nedladdningar.
+  Tests for the report generator (lib\Report.ps1): theme, validation, links and page building. The generator is
+  dot-sourced and gets stubs for what it otherwise takes from the main script. No sign-ins or downloads.
 
-  Kör:  Invoke-Pester .\tests
+  Most page tests build the report in Swedish and check the Swedish texts (that is the language pack that differs from
+  the base), so the expected strings in them are Swedish on purpose.
+
+  Run:  Invoke-Pester .\tests
 #>
 
 BeforeAll {
     $script:Root = Resolve-Path (Join-Path $PSScriptRoot '..')
     $script:ScriptRoot = $script:Root.Path
 
-    # Funktioner som generatorn använder från huvudscriptet: läses ut med parsern, eller ersätts av stubbar.
+    # Functions that the generator uses from the main script: read out with the parser, or replaced by stubs.
     $ast = [System.Management.Automation.Language.Parser]::ParseFile((Join-Path $script:Root 'Run-Rapportkit.ps1'), [ref]$null, [ref]$null)
     foreach ($d in $ast.FindAll({ param($n) $n -is [System.Management.Automation.Language.FunctionDefinitionAst] -and $n.Name -in 'Import-CsvChecked' }, $true)) { . ([scriptblock]::Create($d.Extent.Text)) }
     $script:Warnings = [System.Collections.Generic.List[string]]::new()
@@ -22,18 +25,18 @@ BeforeAll {
     # The existing page tests check the Swedish texts: the language is chosen by -ReportLanguage (here the script variable).
     $script:ReportLanguage = 'sv'
     [void](Initialize-Language 'sv')
-    # Sidorna HTML-kodar svenska tecken (ö blir &#246;): avkoda innan texten jämförs.
+    # The pages HTML-encode non-ASCII characters (ö becomes &#246;): decode before the text is compared.
     function Get-PageText([string]$File) { [System.Web.HttpUtility]::HtmlDecode((Get-Content (Join-Path $script:RunDir $File) -Raw)) }
 }
 
-Describe 'Test-CssColor och Test-CssFont' {
-    It 'godkänner vanliga färgvärden' -ForEach @(
+Describe 'Test-CssColor and Test-CssFont' {
+    It 'accepts ordinary colour values' -ForEach @(
         @{ V = '#f97316' }, @{ V = '#fff' }, @{ V = 'rgb(1, 2, 3)' }, @{ V = 'rgba(0,0,0,.5)' }, @{ V = 'hsl(120, 50%, 40%)' }, @{ V = 'tomato' }
     ) { Test-CssColor $V | Should -BeTrue }
-    It 'nekar värden som kan bryta ut ur CSS' -ForEach @(
+    It 'rejects values that could break out of the CSS' -ForEach @(
         @{ V = 'red; } body { display:none' }, @{ V = 'url(http://x)' }, @{ V = '#zzz' }, @{ V = '' }, @{ V = 'red}</style><script>' }
     ) { Test-CssColor $V | Should -BeFalse }
-    It 'godkänner typsnittslistor och nekar farliga' {
+    It 'accepts font lists and rejects dangerous ones' {
         Test-CssFont 'Inter, "Segoe UI", system-ui, sans-serif' | Should -BeTrue
         Test-CssFont 'x; } body{display:none' | Should -BeFalse
         Test-CssFont 'a</style>' | Should -BeFalse
@@ -42,23 +45,23 @@ Describe 'Test-CssColor och Test-CssFont' {
 
 Describe 'Get-BrandTheme' {
     BeforeEach { $script:Warnings.Clear() }
-    It 'läser temat i branding\ (Moln på svenska)' {
+    It 'reads the theme in branding\ (Moln på svenska)' {
         $t = Get-BrandTheme
         $t.Data.name | Should -Be 'Moln på svenska'
         $t.Data.colors.light.accent | Should -Be '#f97316'
         $t.Data.colors.dark.bg | Should -Be '#060f09'
         $script:Warnings.Count | Should -Be 0
     }
-    It 'läser det neutrala temat' {
+    It 'reads the neutral theme' {
         (Get-BrandTheme (Join-Path $script:ScriptRoot 'branding-exempel\neutral')).Data.name | Should -Be 'Neutral'
     }
-    It 'faller tillbaka på inbyggd standard och varnar när temat saknas' {
+    It 'falls back on the built-in default and warns when the theme is missing' {
         $t = Get-BrandTheme (Join-Path $TestDrive 'finns-inte')
         $t.Data.name | Should -Be 'Neutral'
         $t.Source | Should -Be 'built-in default'
         $script:Warnings.Count | Should -Be 1
     }
-    It 'byter ut ogiltiga färger mot standardvärdet och varnar' {
+    It 'replaces invalid colours by the default value and warns' {
         $dir = Join-Path $TestDrive 'bad'; New-Item -ItemType Directory $dir | Out-Null
         '{ "name": "Dåligt", "colors": { "light": { "accent": "red; } body{display:none" } } }' | Set-Content (Join-Path $dir 'theme.json') -Encoding utf8
         $t = Get-BrandTheme $dir
@@ -66,7 +69,7 @@ Describe 'Get-BrandTheme' {
         $t.Data.colors.light.accent | Should -Be '#0969da'
         ($script:Warnings -join ' ') | Should -Match 'colors.light.accent'
     }
-    It 'fyller i värden som saknas i ett ofullständigt tema' {
+    It 'fills in the values that are missing in an incomplete theme' {
         $dir = Join-Path $TestDrive 'partial'; New-Item -ItemType Directory $dir | Out-Null
         '{ "name": "Delvis", "colors": { "light": { "accent": "#ff00aa" } } }' | Set-Content (Join-Path $dir 'theme.json') -Encoding utf8
         $t = Get-BrandTheme $dir
@@ -74,7 +77,7 @@ Describe 'Get-BrandTheme' {
         $t.Data.colors.light.bg | Should -Be '#f6f8fa'
         $t.Data.colors.dark.text | Should -Be '#e6edf3'
     }
-    It 'tål trasig JSON' {
+    It 'survives broken JSON' {
         $dir = Join-Path $TestDrive 'broken'; New-Item -ItemType Directory $dir | Out-Null
         '{ inte json' | Set-Content (Join-Path $dir 'theme.json')
         (Get-BrandTheme $dir).Source | Should -Be 'built-in default'
@@ -84,13 +87,13 @@ Describe 'Get-BrandTheme' {
 
 Describe 'New-ThemeCss' {
     BeforeEach { $script:Warnings.Clear() }
-    It 'innehåller temats variabler för ljust, mörkt och utskrift' {
+    It 'contains the variables of the theme for light, dark and print' {
         $css = New-ThemeCss (Get-BrandTheme)
         $css | Should -Match '--rk-accent:#f97316'
         $css | Should -Match '@media \(prefers-color-scheme:dark\)\{:root\{--rk-bg:#060f09'
         $css | Should -Match '@media print\{:root\{--rk-bg:#f0f5f1'
     }
-    It 'lägger till temats custom.css sist, men bara inifrån temamappen' {
+    It 'adds the custom.css of the theme last, but only from inside the theme folder' {
         $dir = Join-Path $TestDrive 'css'; New-Item -ItemType Directory $dir | Out-Null
         '{ "name": "Css", "customCss": "custom.css" }' | Set-Content (Join-Path $dir 'theme.json') -Encoding utf8
         '.rk-top{outline:2px solid hotpink}' | Set-Content (Join-Path $dir 'custom.css')
@@ -104,13 +107,13 @@ Describe 'New-ThemeCss' {
 
 Describe 'Get-LogoHtml' {
     BeforeEach { $script:Warnings.Clear() }
-    It 'bygger ordbilden som ETT element med färgade delar' {
+    It 'builds the wordmark as ONE element with coloured parts' {
         $html = Get-LogoHtml (Get-BrandTheme)
         $html | Should -Match '^<span class="rk-wm">'
         $html | Should -Match 'rk-w-accent">svenska'
         ([regex]::Matches($html, '<span class="rk-wm">')).Count | Should -Be 1
     }
-    It 'bäddar in en bildlogga som data-URI' {
+    It 'embeds an image logo as a data URI' {
         $dir = Join-Path $TestDrive 'logo'; New-Item -ItemType Directory $dir | Out-Null
         '<svg xmlns="http://www.w3.org/2000/svg" width="10" height="10"/>' | Set-Content (Join-Path $dir 'logo.svg')
         '{ "name": "Bild", "logo": { "type": "image", "file": "logo.svg", "alt": "Min <logga>" } }' | Set-Content (Join-Path $dir 'theme.json') -Encoding utf8
@@ -118,7 +121,7 @@ Describe 'Get-LogoHtml' {
         $html | Should -Match 'src="data:image/svg\+xml;base64,'
         $html | Should -Match 'alt="Min &lt;logga&gt;"'
     }
-    It 'faller tillbaka på ordbild när loggan saknas eller ligger utanför temamappen' {
+    It 'falls back on the wordmark when the logo is missing or outside the theme folder' {
         $dir = Join-Path $TestDrive 'logo2'; New-Item -ItemType Directory $dir | Out-Null
         '{ "name": "Saknas", "logo": { "type": "image", "file": "..\\..\\x.png" } }' | Set-Content (Join-Path $dir 'theme.json') -Encoding utf8
         (Get-LogoHtml (Get-BrandTheme $dir)) | Should -Match 'rk-wm'
@@ -126,41 +129,41 @@ Describe 'Get-LogoHtml' {
     }
 }
 
-Describe 'Länkar och HTML-byggstenar' {
-    It 'New-ExtLink öppnar i nytt fönster med noopener och kodar text och adress' {
+Describe 'Links and HTML building blocks' {
+    It 'New-ExtLink opens in a new window with noopener and encodes the text and the address' {
         $a = New-ExtLink 'https://example.com/?a=1&b="2"' '<Rapport>'
         $a | Should -Match 'target="_blank"'
         $a | Should -Match 'rel="noopener noreferrer"'
         $a | Should -Not -Match '<Rapport>'
         $a | Should -Match '&amp;b=&quot;2&quot;'
     }
-    It 'ConvertTo-HtmlTable kodar celler och visar Status som märke' {
+    It 'ConvertTo-HtmlTable encodes the cells and shows Status as a label' {
         $rows = @([pscustomobject]@{ Namn = '<script>x</script>'; Status = 'Fel' })
         $html = ConvertTo-HtmlTable $rows @(@{ Name = 'Namn'; Label = 'Namn' }, @{ Name = 'Status'; Label = 'Status' })
         $html | Should -Not -Match '<script>'
         $html | Should -Match 'class="pill fel"'
     }
-    It 'Tile blir en länk bara när adress anges' {
+    It 'Tile becomes a link only when an address is given' {
         (Tile 'A' 1 '' 'sida.html') | Should -Match '^<a class="tile'
         (Tile 'A' 1) | Should -Match '^<div class="tile'
     }
-    It 'Get-UniqueRows behåller första raden per nyckel' {
+    It 'Get-UniqueRows keeps the first row per key' {
         $rows = @([pscustomobject]@{ Id = 'a'; V = 1 }, [pscustomobject]@{ Id = 'a'; V = 2 }, [pscustomobject]@{ Id = 'b'; V = 3 })
         $u = Get-UniqueRows $rows 'Id'
         $u.Count | Should -Be 2
         $u[0].V | Should -Be 1
         Get-UniqueRows $null 'Id' | Should -BeNullOrEmpty
     }
-    It 'ConvertTo-Number hanterar decimalkomma och punkt' {
+    It 'ConvertTo-Number handles decimal comma and decimal point' {
         ConvertTo-Number '272,99' | Should -Be 272.99
         ConvertTo-Number '1.5' | Should -Be 1.5
         ConvertTo-Number 'abc' | Should -Be 0
     }
 }
 
-Describe 'Write-ReportSite (sidbygge)' {
+Describe 'Write-ReportSite (page building)' {
     BeforeAll {
-        # Ett litet resultatträd med syntetiska data för azqr, Defender och Maester
+        # A small result tree with synthetic data for azqr, Defender and Maester
         $script:RunDir = Join-Path $TestDrive 'run'
         $script:Dirs = @{}
         foreach ($n in 'azqr', 'azgovviz', 'maester', 'portal') { $script:Dirs[$n] = Join-Path $script:RunDir $n; New-Item -ItemType Directory -Force $script:Dirs[$n] | Out-Null }
@@ -171,7 +174,7 @@ Describe 'Write-ReportSite (sidbygge)' {
         "Prenumeration,Manad,Kostnad,Valuta`nSub,2026-09,100,SEK`nSub,2026-10,150,SEK" | Set-Content (Join-Path $script:Dirs.portal 'kostnad.csv') -Encoding utf8
         $mt = Join-Path $script:Dirs.maester 'test-results'; New-Item -ItemType Directory $mt | Out-Null
         @{ PassedCount = 1; FailedCount = 1; SkippedCount = 1; Tests = @(@{ Name = 'MT.1'; Result = 'Failed'; ResultDetail = @{ TestSkipped = $null } }, @{ Name = 'MT.2'; Result = 'Skipped'; ResultDetail = @{ TestSkipped = 'NotLicensedEntraIDP1' } }, @{ Name = 'MT.3'; Result = 'Passed'; ResultDetail = @{ TestSkipped = $null } }) } | ConvertTo-Json -Depth 6 | Set-Content (Join-Path $mt 'maester.json') -Encoding utf8
-        # Varje Maester-körning lämnar en egen tidsstämplad HTML; rapporten ska länka till den senaste.
+        # Every Maester run leaves a timestamped HTML file of its own; the report must link to the newest.
         foreach ($t in '2026-10-30-151835', '2026-10-30-162523') { '<html></html>' | Set-Content (Join-Path $mt "TestResults-$t.html") -Encoding utf8 }
 
         $script:TenantId = '00000000-0000-0000-0000-000000000000'; $script:Period = '2026-10'
@@ -183,13 +186,13 @@ Describe 'Write-ReportSite (sidbygge)' {
         $script:Warnings.Clear()
         $script:Index = Write-ReportSite
     }
-    It 'skriver alla sju sidorna och ger startsidan' {
+    It 'writes all seven pages and returns the start page' {
         $script:Index | Should -Match 'rapport\.html$'
         foreach ($f in 'rapport.html', 'rapport-struktur.html', 'rapport-styrning.html', 'rapport-resurser.html', 'rapport-entra.html', 'rapport-defender-kostnad.html', 'rapport-om.html') {
             Test-Path (Join-Path $script:RunDir $f) | Should -BeTrue
         }
     }
-    It 'visar vilka resultatfiler rapporten byggdes av, utan användarens mappnamn' {
+    It 'shows which result files the report was built from, without the folder names of the user' {
         $h = Get-PageText 'rapport-om.html'
         $h | Should -Match 'Resultatfiler som användes'
         $h | Should -Match 'azqr\\azqr_x\.impacted\.csv'
@@ -198,26 +201,26 @@ Describe 'Write-ReportSite (sidbygge)' {
         $h | Should -Not -Match ([regex]::Escape($TestDrive))
         $h | Should -Not -Match 'tidigare körningar'      # one run of each tool: nothing older to mention
     }
-    It 'visar rapportmallen utan sökväg' {
+    It 'shows the report theme without a path' {
         $h = Get-PageText 'rapport-om.html'
         $h | Should -Match 'Moln på svenska'
         $h | Should -Not -Match 'branding'
     }
-    It 'har samma navigering och temat på varje sida' {
+    It 'has the same navigation and the theme on every page' {
         foreach ($f in Get-ChildItem $script:RunDir -Filter 'rapport*.html') {
             $h = Get-Content $f.FullName -Raw
             $h | Should -Match 'class="rk-nav"'
             $h | Should -Match '--rk-accent:#f97316'
-            # Den samlade PDF-sidan (rapport-komplett.html) markerar ingen enskild flik.
+            # The combined PDF page (rapport-komplett.html) marks no single tab.
             ([regex]::Matches($h, 'aria-current="page"')).Count | Should -Be $(if ($f.Name -eq 'rapport-komplett.html') { 0 } else { 1 })
         }
     }
-    It 'PDF-knappen öppnar den samlade rapporten med alla sju sidor' {
+    It 'the PDF button opens the combined report with all seven pages' {
         $full = Get-Content (Join-Path $script:RunDir 'rapport-komplett.html') -Raw
         ([regex]::Matches($full, '<section class="rk-sec">')).Count | Should -Be 7
         (Get-Content (Join-Path $script:RunDir 'rapport.html') -Raw) | Should -Match 'href="rapport-komplett\.html#skriv" target="_blank"'
     }
-    It 'hämtar inget från internet (inga src/href mot externa adresser utom kontaktlänken)' {
+    It 'fetches nothing from the internet (no src/href to external addresses except the contact link)' {
         foreach ($f in Get-ChildItem $script:RunDir -Filter 'rapport*.html') {
             $h = Get-Content $f.FullName -Raw
             $ext = [regex]::Matches($h, '(?:src|href)="(https?://[^"]+)"') | ForEach-Object { $_.Groups[1].Value } | Sort-Object -Unique
@@ -225,21 +228,21 @@ Describe 'Write-ReportSite (sidbygge)' {
             $h | Should -Not -Match '<script\s+src='
         }
     }
-    It 'visar azqr, Maester och kostnad på rätt sidor' {
+    It 'shows azqr, Maester and cost on the right pages' {
         (Get-PageText 'rapport-resurser.html') | Should -Match 'Använd HTTPS'
         (Get-PageText 'rapport-entra.html') | Should -Match 'Licens saknas: Entra ID P1'
         (Get-PageText 'rapport-defender-kostnad.html') | Should -Match '2026-10'
     }
-    It 'läser Defender-filer med de nya id-kolumnerna och länkar till senaste Maester-rapporten' {
+    It 'reads Defender files with the newer id columns and links to the newest Maester report' {
         (Get-PageText 'rapport-defender-kostnad.html') | Should -Match '4/14'
         $h = Get-Content (Join-Path $script:RunDir 'rapport-entra.html') -Raw
         $h | Should -Match 'TestResults-2026-10-30-162523\.html'
         $h | Should -Not -Match 'TestResults-2026-10-30-151835\.html'
     }
-    It 'ger begripliga tomsidor när underlag saknas (Styrning utan Governance Visualizer)' {
+    It 'gives understandable empty pages when the data is missing (Governance without Governance Visualizer)' {
         (Get-PageText 'rapport-styrning.html') | Should -Match 'Governance Visualizer har inte körts'
     }
-    It 'kan byggas med ett annat tema' {
+    It 'can be built with another theme' {
         $script:BrandingDir = Join-Path $script:ScriptRoot 'branding-exempel\neutral'
         Write-ReportSite | Out-Null
         (Get-Content (Join-Path $script:RunDir 'rapport.html') -Raw) | Should -Match '--rk-accent:#0969da'
@@ -247,14 +250,14 @@ Describe 'Write-ReportSite (sidbygge)' {
     }
 }
 
-Describe 'Val av resultatfiler när en mapp har flera körningar' {
+Describe 'Choice of result files when a folder holds several runs' {
     BeforeAll {
         $script:RunDir = Join-Path $TestDrive 'multi'
         $script:Dirs = @{}
         foreach ($n in 'azqr', 'azgovviz', 'maester', 'portal', 'struktur') { $script:Dirs[$n] = Join-Path $script:RunDir $n; New-Item -ItemType Directory -Force $script:Dirs[$n] | Out-Null }
     }
     BeforeEach { $script:Warnings.Clear() }
-    It 'Find-ResultFile tar den senaste filen, och vid samma tid den med senast namn' {
+    It 'Find-ResultFile takes the newest file, and at the same time the one with the last name' {
         $d = Join-Path $TestDrive 'ff'; New-Item -ItemType Directory $d | Out-Null
         foreach ($n in 'A_20261030_153226_x.csv', 'A_20261030_162235_x.csv', 'A_20261030_154908_x.csv') { 'x' | Set-Content (Join-Path $d $n) }
         $t = Get-Date
@@ -264,7 +267,7 @@ Describe 'Val av resultatfiler när en mapp har flera körningar' {
         (Find-ResultFile $d '*_x.csv').Name | Should -Be 'A_20261030_153226_x.csv'
         Find-ResultFile (Join-Path $d 'finns-inte') '*.csv' | Should -BeNullOrEmpty
     }
-    It 'läser den senaste TestResults-filen, och maester.json bara om det inte finns någon' {
+    It 'reads the newest TestResults file, and maester.json only if there is none' {
         $mt = Join-Path $script:Dirs.maester 'test-results'; New-Item -ItemType Directory $mt | Out-Null
         $mk = { param($name, $passed, $time) $p = Join-Path $mt $name; @{ PassedCount = $passed; FailedCount = 0; SkippedCount = 0; Tests = @() } | ConvertTo-Json | Set-Content $p -Encoding utf8; (Get-Item $p).LastWriteTime = $time }
         & $mk 'maester.json' 7 (Get-Date).AddHours(-1)             # left over from an earlier run, written last of all
@@ -273,7 +276,7 @@ Describe 'Val av resultatfiler när en mapp har flera körningar' {
         & $mk 'TestResults-2026-10-30-120000.json' 2 (Get-Date).AddHours(-2)
         (Get-ReportData).Maester.PassedCount | Should -Be 2        # the newest TestResults file wins over maester.json
     }
-    It 'listar de filer som användes och räknar de äldre körningarna' {
+    It 'lists the files that were used and counts the older runs' {
         $guid = '11111111-2222-3333-4444-555555555555'
         foreach ($t in '20261030_100000', '20261031_100000') { '<html></html>' | Set-Content (Join-Path $script:Dirs.azgovviz "AzGovViz_6.7.2_${t}_$guid.html") -Encoding utf8 }
         $mt = Join-Path $script:Dirs.maester 'test-results'
@@ -288,11 +291,45 @@ Describe 'Val av resultatfiler när en mapp har flera körningar' {
         $d.OlderMaesterRuns | Should -Be 1
         ($d.Used | Where-Object Tool -eq 'Maester').Modified | Should -Match '^\d{4}-\d{2}-\d{2} \d{2}:\d{2}$'
     }
+    It 'reads the data files of the same Governance Visualizer run as the main report, even if an older one was written later' {
+        $gv = Join-Path $TestDrive 'samerun'; New-Item -ItemType Directory $gv | Out-Null
+        $keepDirs = $script:Dirs; $script:Dirs = @{ azqr = 'none'; azgovviz = $gv; maester = 'none'; portal = 'none'; struktur = 'none' }
+        try {
+            $guid = '11111111-2222-3333-4444-555555555555'
+            $hdr = 'RoleAssignmentId;RoleClear;ObjectType;ScopeTenOrMgOrSubOrRGOrRes'
+            foreach ($run in @(@('20261030_100000', 'Reader'), @('20261031_100000', 'Owner'))) {
+                $base = "AzGovViz_6.7.2_$($run[0])_$guid"
+                '<html></html>' | Set-Content (Join-Path $gv "$base.html")
+                "$hdr`n1;$($run[1]);User;Sub" | Set-Content (Join-Path $gv "${base}_RoleAssignments.csv")
+            }
+            # The older run's file is the most recently written one (for example after a copy)
+            (Get-Item (Join-Path $gv "AzGovViz_6.7.2_20261030_100000_${guid}_RoleAssignments.csv")).LastWriteTime = (Get-Date).AddMinutes(5)
+            $d = Get-ReportData
+            @($d.GvRoles).RoleClear | Should -Be 'Owner'
+        }
+        finally { $script:Dirs = $keepDirs }
+    }
 }
 
-Describe 'Mörk logga och bakgrund' {
+Describe 'The Entra page with tests that ended with an error' {
+    BeforeAll { $script:Warnings.Clear(); [void](Initialize-Language 'sv') }
+    It 'shows the errors in a tile and a note of their own' {
+        $m = [pscustomobject]@{ PassedCount = 5; FailedCount = 2; SkippedCount = 1; ErrorCount = 3; Tests = @() }
+        $h = [System.Web.HttpUtility]::HtmlDecode((Get-EntraPageHtml @{ MaesterPresent = $true; Maester = $m }))
+        $h | Should -Match '<div class="v">3</div><div class="l">Fel</div>'
+        $h | Should -Match '3 test\(er\) slutade med fel'
+    }
+    It 'shows no error tile when there were no errors, or in an older file without ErrorCount' {
+        foreach ($m in @([pscustomobject]@{ PassedCount = 5; FailedCount = 2; SkippedCount = 1; ErrorCount = 0; Tests = @() }, [pscustomobject]@{ PassedCount = 5; FailedCount = 2; SkippedCount = 1; Tests = @() })) {
+            $h = [System.Web.HttpUtility]::HtmlDecode((Get-EntraPageHtml @{ MaesterPresent = $true; Maester = $m }))
+            $h | Should -Not -Match 'slutade med fel'
+        }
+    }
+}
+
+Describe 'Dark logo and background' {
     BeforeEach { $script:Warnings.Clear() }
-    It 'bäddar in en separat logga för mörkt läge' {
+    It 'embeds a separate logo for dark mode' {
         $dir = Join-Path $TestDrive 'darklogo'; New-Item -ItemType Directory $dir | Out-Null
         '<svg xmlns="http://www.w3.org/2000/svg" width="10" height="10"/>' | Set-Content (Join-Path $dir 'l.svg')
         '<svg xmlns="http://www.w3.org/2000/svg" width="12" height="12"/>' | Set-Content (Join-Path $dir 'd.svg')
@@ -302,7 +339,7 @@ Describe 'Mörk logga och bakgrund' {
         $html | Should -Match 'rk-l-dark'
         $script:Warnings.Count | Should -Be 0
     }
-    It 'lägger in en bakgrundsbild i CSS och varnar om filen saknas' {
+    It 'puts a background image in the CSS and warns if the file is missing' {
         $dir = Join-Path $TestDrive 'bg'; New-Item -ItemType Directory $dir | Out-Null
         [IO.File]::WriteAllBytes((Join-Path $dir 'b.png'), [byte[]](1..50))
         '{ "name": "Bg", "background": { "file": "b.png", "opacity": 0.2 } }' | Set-Content (Join-Path $dir 'theme.json') -Encoding utf8
@@ -314,7 +351,7 @@ Describe 'Mörk logga och bakgrund' {
     }
 }
 
-Describe 'Anonymisering' {
+Describe 'Anonymization' {
     BeforeAll {
         $script:RunDir = Join-Path $TestDrive 'anon'
         $script:Dirs = @{}
@@ -334,11 +371,11 @@ Describe 'Anonymisering' {
     }
     AfterAll { $script:Anonymize = $false; $script:BrandingDir = $null }
 
-    It 'bygger anonyma sidor i anonym\ och låter den vanliga rapporten vara orörd' {
+    It 'builds anonymized pages in anonym\ and leaves the plain report untouched' {
         foreach ($f in 'rapport.html', 'rapport-resurser.html', 'rapport-komplett.html') { Test-Path (Join-Path $script:RunDir "anonym\$f") | Should -BeTrue }
         (Get-PageText 'rapport-resurser.html') | Should -Match 'app-kundnamn-01'
     }
-    It 'byter ut resurs-, resursgrupps- och prenumerationsnamn samt ID:n' {
+    It 'replaces the names of resources, resource groups and subscriptions, and the IDs' {
         $all = ''
         foreach ($f in Get-ChildItem (Join-Path $script:RunDir 'anonym') -Filter '*.html') { $all += [System.Web.HttpUtility]::HtmlDecode((Get-Content $f.FullName -Raw)) }
         $all | Should -Not -Match 'app-kundnamn-01'
@@ -349,7 +386,7 @@ Describe 'Anonymisering' {
         $all | Should -Match 'Resurs 1'
         $all | Should -Match 'anonymiserad'
     }
-    It 'samma namn ger alltid samma alias, och olika namn olika alias' {
+    It 'the same name always gets the same alias, and different names different aliases' {
         Register-AnonData @{ GvRoles = @([pscustomobject]@{ ObjectType = 'User'; ObjectDisplayName = 'Kalle Testsson'; ObjectSignInName = 'kalle@kund.se' }, [pscustomobject]@{ ObjectType = 'User'; ObjectDisplayName = 'Lisa Provsson'; ObjectSignInName = 'lisa@kund.se' }) }
         $a = [System.Web.HttpUtility]::HtmlDecode((ConvertTo-AnonymousHtml '<td>Kalle Testsson</td><td>kalle@kund.se</td><td>Lisa Provsson</td><td>Kalle Testsson</td>'))
         $a | Should -Not -Match 'Kalle|Lisa|kund\.se'
@@ -357,14 +394,14 @@ Describe 'Anonymisering' {
         $a | Should -Match 'Användare 2'
         $a | Should -Match 'anvandare1@exempel\.invalid'
     }
-    It 'byter ut e-post, GUID och onmicrosoft-adresser som inte samlats in, men rör inte taggar' {
+    It 'replaces e-mail addresses, GUIDs and onmicrosoft addresses that were not collected, but does not touch tags' {
         Register-AnonData @{}
         $a = ConvertTo-AnonymousHtml '<a class="pill high" href="x.html">okänd@firma.com, 12345678-1234-1234-1234-123456789abc, bolag.onmicrosoft.com</a>'
         $a | Should -Match '<a class="pill high" href="x\.html">'
         $a | Should -Not -Match 'firma\.com|12345678-1234|bolag\.onmicrosoft'
         $a | Should -Match 'exempel\.invalid'
     }
-    It 'ersätter länkar till verktygens egna rapporter med text' {
+    It 'replaces links to the reports of the tools by text' {
         Register-AnonData @{}
         $a = [System.Web.HttpUtility]::HtmlDecode((ConvertTo-AnonymousHtml (New-ExtLink 'azgovviz/AzGovViz_x.html' 'Governance Visualizer')))
         $a | Should -Not -Match 'href='
@@ -373,7 +410,7 @@ Describe 'Anonymisering' {
     }
 }
 
-Describe 'Anonymiserat läge: bara anonyma sidor' {
+Describe 'Anonymized mode: only anonymized pages' {
     BeforeAll {
         $script:RunDir = Join-Path $TestDrive 'anonmode'
         $script:AnonOutDir = Join-Path $TestDrive 'anonmode-ut'
@@ -391,27 +428,27 @@ ARG,APRL,Security,High,Microsoft.Web/sites,Använd HTTPS,r1,11111111-2222-3333-4
         $script:BrandingDir = Join-Path $script:ScriptRoot 'branding-exempel\neutral'
         # An anonymized run from earlier in the same folder must not leave pages behind
         New-Item -ItemType Directory -Force $script:AnonOutDir | Out-Null
-        'GAMMAL SIDA med Kundbolaget' | Set-Content (Join-Path $script:AnonOutDir 'rapport-gammal.html') -Encoding utf8
+        'OLD PAGE with Kundbolaget' | Set-Content (Join-Path $script:AnonOutDir 'rapport-gammal.html') -Encoding utf8
         $script:Anonymize = $true
         $script:Warnings.Clear()
         $script:Index = Write-ReportSite
     }
     AfterAll { $script:Anonymize = $false; $script:AnonOutDir = $null; $script:BrandingDir = $null }
 
-    It 'skriver bara de anonyma sidorna, i den anonyma mappen, och ger startsidan därifrån' {
+    It 'writes only the anonymized pages, in the anonymized folder, and returns the start page from there' {
         $script:Index | Should -Be (Join-Path $script:AnonOutDir 'rapport.html')
         foreach ($f in 'rapport.html', 'rapport-struktur.html', 'rapport-styrning.html', 'rapport-resurser.html', 'rapport-entra.html', 'rapport-defender-kostnad.html', 'rapport-om.html', 'rapport-komplett.html') {
             Test-Path (Join-Path $script:AnonOutDir $f) | Should -BeTrue -Because $f
         }
     }
-    It 'skriver ingen vanlig rapport och ingen anonym-mapp i arbetsmappen' {
+    It 'writes no plain report and no anonym folder in the working folder' {
         @(Get-ChildItem $script:RunDir -Filter 'rapport*.html' -ErrorAction SilentlyContinue).Count | Should -Be 0
         Test-Path (Join-Path $script:RunDir 'anonym') | Should -BeFalse
     }
-    It 'tar bort sidor från en tidigare anonym körning' {
+    It 'removes pages from an earlier anonymized run' {
         Test-Path (Join-Path $script:AnonOutDir 'rapport-gammal.html') | Should -BeFalse
     }
-    It 'har inga namn eller ID:n i någon sida' {
+    It 'has no names or IDs on any page' {
         foreach ($f in Get-ChildItem $script:AnonOutDir -File) {
             $h = [System.Web.HttpUtility]::HtmlDecode((Get-Content $f.FullName -Raw))
             $h | Should -Not -Match 'app-kundnamn-01|rg-hemlig|Kundbolaget|aaaaaaaa-bbbb|11111111-2222' -Because $f.Name
@@ -419,7 +456,7 @@ ARG,APRL,Security,High,Microsoft.Web/sites,Använd HTTPS,r1,11111111-2222-3333-4
     }
 }
 
-Describe 'Anonymisering av policynamn' {
+Describe 'Anonymization of policy names' {
     BeforeAll {
         $script:Warnings.Clear()
         [void](Initialize-Language 'sv')
@@ -431,18 +468,18 @@ Describe 'Anonymisering av policynamn' {
         Register-AnonData @{ GvPolicies = $script:GvPol }
         $script:A = [System.Web.HttpUtility]::HtmlDecode((ConvertTo-AnonymousHtml '<td>Kundbolaget: kräv taggar</td><td>Kundbolaget: egen policy</td><td>Kundbolaget egen definition</td><td>Allowed locations</td>'))
     }
-    It 'byter namn som någon valt mot definitionens namn (offentlig text) för inbyggda policyer' {
+    It 'replaces a name that someone chose by the name of the definition (public text) for built-in policies' {
         $script:A | Should -Match 'Require a tag on resource groups'
         $script:A | Should -Not -Match 'kräv taggar'
     }
-    It 'ger egna policyer ett alias och låter oförändrade inbyggda namn vara' {
+    It 'gives custom policies an alias and leaves unchanged built-in names alone' {
         $script:A | Should -Not -Match 'Kundbolaget|egen definition'
         $script:A | Should -Match 'Egen policy 1'
         $script:A | Should -Match 'Allowed locations'
     }
 }
 
-Describe 'Sidan Struktur' {
+Describe 'The Structure page' {
     BeforeAll {
         $script:RunDir = Join-Path $TestDrive 'struk'
         $script:Dirs = @{}
@@ -468,7 +505,7 @@ Describe 'Sidan Struktur' {
         $pe = { param($fi, $f, $ti, $t, $transit) [pscustomobject]@{ FranId = $fi; Fran = $f; TillId = $ti; Till = $t; Status = 'Connected'; GatewayTransit = $transit; AnvandRemoteGateways = $false; ForwardedTraffic = $true; TillAdressrymd = '' } }
         @(
             (& $pe $hub 'vnet-hubben' $a 'vnet-spoke-a' $true), (& $pe $a 'vnet-spoke-a' $hub 'vnet-hubben' $false),
-            (& $pe $hub 'vnet-hubben' $b 'vnet-spoke-b' $true)     # saknar motsvarande peering från spoke-b: ensidig
+            (& $pe $hub 'vnet-hubben' $b 'vnet-spoke-b' $true)     # has no peering back from spoke-b: one-way
         ) | Export-Csv (Join-Path $s 'natverk-peerings.csv') -NoTypeInformation -Encoding utf8
         @([pscustomobject]@{ Typ = 'azurefirewalls'; Namn = 'fw-hubben'; Prenumeration = '11111111-1111-1111-1111-111111111111'; Resursgrupp = 'rg-nat'; Plats = 'northeurope'; Extra = 'AZFW_VNet'; VnetId = $hub }) | Export-Csv (Join-Path $s 'natverk-noder.csv') -NoTypeInformation -Encoding utf8
         @([pscustomobject]@{ Prenumeration = '11111111-1111-1111-1111-111111111111'; Resurser = 42 }) | Export-Csv (Join-Path $s 'resurser-per-prenumeration.csv') -NoTypeInformation -Encoding utf8
@@ -485,13 +522,13 @@ Describe 'Sidan Struktur' {
     }
     AfterAll { $script:Anonymize = $false; $script:BrandingDir = $null }
 
-    It 'ConvertTo-CidrRange hanterar IPv4 och ignorerar annat' {
+    It 'ConvertTo-CidrRange handles IPv4 and ignores anything else' {
         $r = ConvertTo-CidrRange '10.0.0.0/16'
         ($r[1] - $r[0] + 1) | Should -Be 65536
         ConvertTo-CidrRange 'fd00::/8' | Should -BeNullOrEmpty
         ConvertTo-CidrRange '10.0.0.999/16' | Should -BeNullOrEmpty
     }
-    It 'bygger sidan med träd, bild och tabeller' {
+    It 'builds the page with the tree, the diagram and the tables' {
         $h = Get-PageText 'rapport-struktur.html'
         $h | Should -Match '<svg class="net-svg"'
         $h | Should -Match 'Plattform'
@@ -499,21 +536,21 @@ Describe 'Sidan Struktur' {
         $h | Should -Match '42 resurser'
         $h | Should -Match 'fw-hubben'
     }
-    It 'sätter roller: hub, spoke och isolerat' {
+    It 'sets the roles: hub, spoke and isolated' {
         $m = Get-NetworkModel @{ Vnets = @(Import-Csv (Join-Path $script:Dirs.struktur 'natverk-vnet.csv')); Peerings = @(Import-Csv (Join-Path $script:Dirs.struktur 'natverk-peerings.csv')); NetNodes = @(Import-Csv (Join-Path $script:Dirs.struktur 'natverk-noder.csv')); MgRows = @() }
         $role = @{}; foreach ($v in $m.Vnets) { $role[$v.Namn] = $m.Role[([string]$v.Id).ToLower()] }
         $role['vnet-hubben'] | Should -Be 'Hub'
         $role['vnet-spoke-a'] | Should -Be 'Spoke'
         $role['vnet-ensam'] | Should -Be 'Isolated'
     }
-    It 'flaggar isolerade nät, ensidig peering och överlappande adressrymder' {
+    It 'flags isolated networks, one-way peering and overlapping address spaces' {
         $h = Get-PageText 'rapport-struktur.html'
         $h | Should -Match 'Isolerade virtuella nät utan peering \(1\):</b> vnet-ensam'
         $h | Should -Match 'Ensidiga peerings \(1\):</b>'
         $h | Should -Match 'Överlappande adressrymder mellan olika nät \(1\):</b>'
         $h | Should -Match 'Hub-and-spoke'
     }
-    It 'den anonyma versionen saknar namn, ID:n och IP-adresser men behåller strukturen' {
+    It 'the anonymized version has no names, IDs or IP addresses but keeps the structure' {
         $h = [System.Web.HttpUtility]::HtmlDecode((Get-Content (Join-Path $script:RunDir 'anonym\rapport-struktur.html') -Raw))
         $h | Should -Not -Match 'vnet-hubben|vnet-spoke|vnet-ensam|fw-hubben|Kundbolaget|Plattform|rg-nat|11111111-1111|22222222-2222|99999999-8888'
         $h | Should -Not -Match '10\.0\.0\.0|10\.1\.0\.0|10\.2\.0\.0|10\.1\.5\.0'
@@ -521,7 +558,7 @@ Describe 'Sidan Struktur' {
         $h | Should -Match 'VNet 1'
         $h | Should -Match '/16'
     }
-    It 'faller tillbaka på Governance Visualizers uppgifter när struktur\ saknas' {
+    It 'falls back on the data of Governance Visualizer when struktur\ is missing' {
         $d = @{ GvPresent = $true; GvRoles = @([pscustomobject]@{ Level = 0; MgId = 'root'; MgName = 'Tenant Root Group'; MgParentId = '__TenantRoot' }, [pscustomobject]@{ Level = 1; MgId = 'mg1'; MgName = 'Plattform'; MgParentId = 'root' }); GvPolicies = $null; GvSubs = @([pscustomobject]@{ SubscriptionId = 's1'; Subscription = 'Min sub'; ManagementGroupPath = 'root/mg1' }) }
         $rows = Get-MgRowsFromGovViz $d
         @($rows | Where-Object Typ -eq 'Managementgrupp').Count | Should -Be 2
@@ -530,18 +567,18 @@ Describe 'Sidan Struktur' {
 }
 
 
-Describe 'Språkpaket (lang\)' {
+Describe 'Language packs (lang\)' {
     BeforeAll {
         $script:LangDir = Join-Path $script:ScriptRoot 'lang'
         $script:Packs = @{}
         foreach ($f in Get-ChildItem $script:LangDir -Filter '*.psd1') { $script:Packs[$f.BaseName] = Import-PowerShellDataFile $f.FullName }
         function Get-Placeholders([string]$Text) { @([regex]::Matches($Text, '\{(\d+)(?::[^}]*)?\}') | ForEach-Object { $_.Groups[1].Value } | Sort-Object -Unique) -join ',' }
     }
-    It 'har engelska som bas och svenska' {
+    It 'has English as the base, and Swedish' {
         $script:Packs.Keys | Should -Contain 'en'
         $script:Packs.Keys | Should -Contain 'sv'
     }
-    It 'har samma nycklar i varje språk som i engelskan' {
+    It 'has the same keys in every language as in English' {
         foreach ($code in $script:Packs.Keys) {
             $missing = @($script:Packs['en'].Keys | Where-Object { -not $script:Packs[$code].ContainsKey($_) })
             $extra = @($script:Packs[$code].Keys | Where-Object { -not $script:Packs['en'].ContainsKey($_) })
@@ -549,7 +586,7 @@ Describe 'Språkpaket (lang\)' {
             "${code}: extra [$($extra -join ', ')]" | Should -Be "${code}: extra []"
         }
     }
-    It 'använder samma platshållare i varje språk som i engelskan' {
+    It 'uses the same placeholders in every language as in English' {
         foreach ($code in $script:Packs.Keys) {
             foreach ($k in $script:Packs['en'].Keys) {
                 if (-not $script:Packs[$code].ContainsKey($k)) { continue }
@@ -557,7 +594,7 @@ Describe 'Språkpaket (lang\)' {
             }
         }
     }
-    It 'har inga tomma texter, och HTML bara i nycklar som slutar på .html' {
+    It 'has no empty texts, and HTML only in keys that end in .html' {
         foreach ($code in $script:Packs.Keys) {
             foreach ($k in $script:Packs[$code].Keys) {
                 [string]$script:Packs[$code][$k] | Should -Not -BeNullOrEmpty -Because "${code}/${k}"
@@ -565,7 +602,7 @@ Describe 'Språkpaket (lang\)' {
             }
         }
     }
-    It 'har alla nycklar som koden använder' {
+    It 'has every key that the code uses' {
         $used = foreach ($f in Get-ChildItem (Join-Path $script:ScriptRoot 'lib') -Filter '*.ps1') {
             [regex]::Matches((Get-Content $f.FullName -Raw), "\bT '([A-Za-z0-9_.]+)'") | ForEach-Object { $_.Groups[1].Value }
         }
@@ -573,12 +610,12 @@ Describe 'Språkpaket (lang\)' {
         $used.Count | Should -BeGreaterThan 100
         @($used | Where-Object { -not $script:Packs['en'].ContainsKey($_) }) | Should -BeNullOrEmpty
     }
-    It 'T fyller i platshållare och ger nyckeln i hakparenteser när den saknas' {
+    It 'T fills in the placeholders and gives the key in square brackets when it is missing' {
         [void](Initialize-Language 'sv')
         (T 'fmt.xOfY' 3 5) | Should -Be '3 av 5'
         (T 'finns.inte') | Should -Be '[finns.inte]'
     }
-    It 'en nyckel som saknas i ett språk faller tillbaka på engelska' {
+    It 'a key that is missing in a language falls back on English' {
         $dir = Join-Path $script:ScriptRoot 'lang'
         $tmp = Join-Path $dir 'zz.psd1'
         try {
@@ -589,7 +626,7 @@ Describe 'Språkpaket (lang\)' {
         }
         finally { Remove-Item $tmp -ErrorAction SilentlyContinue; [void](Initialize-Language 'sv') }
     }
-    It 'Initialize-Language varnar och använder engelska för okänt eller ogiltigt språk' {
+    It 'Initialize-Language warns and uses English for an unknown or invalid language' {
         $script:Warnings.Clear()
         Initialize-Language 'xx' | Should -Be 'en'
         Initialize-Language '..\x' | Should -Be 'en'
@@ -598,7 +635,7 @@ Describe 'Språkpaket (lang\)' {
     }
 }
 
-Describe 'Rapporten på engelska' {
+Describe 'The report in English' {
     BeforeAll {
         $script:RunDir = Join-Path ([IO.Path]::GetTempPath()) ([guid]::NewGuid().ToString())
         New-Item -ItemType Directory $script:RunDir | Out-Null
@@ -611,7 +648,7 @@ Describe 'Rapporten på engelska' {
         $script:Index = Write-ReportSite
     }
     AfterAll { $script:ReportLanguage = 'sv'; [void](Initialize-Language 'sv'); Remove-Item $script:RunDir -Recurse -Force -ErrorAction SilentlyContinue }
-    It 'skriver sidorna med engelsk text och lang="en"' {
+    It 'writes the pages with English text and lang="en"' {
         $html = Get-PageText 'rapport.html'
         $html | Should -Match '<html lang="en">'
         $html | Should -Match 'Pages in the report'
@@ -620,7 +657,7 @@ Describe 'Rapporten på engelska' {
         (Get-PageText 'rapport-defender-kostnad.html') | Should -Match 'Defender plans'
         (Get-PageText 'rapport-struktur.html') | Should -Match 'Management groups and subscriptions'
     }
-    It 'visar steg och status på engelska (gamla svenska värden förstås också)' {
+    It 'shows steps and states in English (old Swedish values are understood too)' {
         $html = Get-PageText 'rapport-om.html'
         $html | Should -Match 'Run status'
         $html | Should -Match '<span class="pill failed">Failed</span>'
@@ -628,10 +665,10 @@ Describe 'Rapporten på engelska' {
         $html | Should -Match '<span class="pill ok">OK</span>'
         $html | Should -Match 'Defender and cost'
     }
-    It 'har inga nycklar som saknas på någon sida' {
+    It 'has no missing keys on any page' {
         foreach ($f in Get-ChildItem $script:RunDir -Filter '*.html') { (Get-PageText $f.Name) | Should -Not -Match '\[[a-z]+\.[A-Za-z0-9_.]+\]' -Because $f.Name }
     }
-    It 'tar språket från temat när -ReportLanguage saknas' {
+    It 'takes the language from the theme when -ReportLanguage is not given' {
         $script:ReportLanguage = $null
         Resolve-ReportLanguage @{ Data = @{ language = 'sv' } } | Should -Be 'sv'
         Resolve-ReportLanguage @{ Data = @{ language = '' } } | Should -Be 'en'

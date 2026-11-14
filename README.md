@@ -23,10 +23,10 @@ Open PowerShell or PowerShell ISE and paste the block below. It downloads the co
 $dest = Join-Path $env:USERPROFILE 'rapportkit-kit'
 $zip  = Join-Path $env:TEMP 'azure-rapportkit.zip'
 New-Item -ItemType Directory -Force $dest | Out-Null
-Invoke-WebRequest 'https://github.com/marcurell/azure-rapportkit/archive/refs/tags/v1.5.1.zip' -OutFile $zip
+Invoke-WebRequest 'https://github.com/marcurell/azure-rapportkit/archive/refs/tags/v1.5.2.zip' -OutFile $zip
 Expand-Archive $zip $dest -Force
 Get-ChildItem $dest -Recurse | Unblock-File
-$script = Join-Path $dest 'azure-rapportkit-1.5.1\Run-Rapportkit.ps1'
+$script = Join-Path $dest 'azure-rapportkit-1.5.2\Run-Rapportkit.ps1'
 $arg = '-NoExit -ExecutionPolicy Bypass -File "' + $script + '"'
 Start-Process powershell -ArgumentList $arg
 ```
@@ -193,8 +193,8 @@ If the account only has access to one subscription Governance Visualizer fails t
 If the computer that runs the script cannot fetch things itself: run `Build-Bundle.ps1` on a computer with internet. It downloads the pinned versions to `tools\` (the checksums are checked), and packs the script, the tools, the licence texts and the README in `rapportkit-bundle.zip` with a `.sha256` file. Unpack the zip on the other computer and run `.\Run-Rapportkit.ps1 -Offline`.
 
 ```powershell
-.\Build-Bundle.ps1                  # with installers (~300 MB)
-.\Build-Bundle.ps1 -SkipInstallers  # without PowerShell/Azure CLI/Git
+.\Build-Bundle.ps1                  # with installers (~250 MB)
+.\Build-Bundle.ps1 -SkipInstallers  # without PowerShell/Azure CLI
 ```
 
 ### Give yourself read access at tenant root (done by a Global Administrator)

@@ -19,18 +19,18 @@ BeforeAll {
     }
 }
 
-Describe 'Språkpaketen' {
+Describe 'The language packs' {
     BeforeAll {
         $script:Packs = @{}
         foreach ($f in Get-ChildItem (Join-Path $script:Repo 'lang') -Filter '*.psd1') { $script:Packs[$f.BaseName] = Import-PowerShellDataFile $f.FullName }
     }
-    It 'alla paket har samma nycklar som engelskan' {
+    It 'every pack has the same keys as English' {
         foreach ($code in $script:Packs.Keys | Where-Object { $_ -ne 'en' }) {
             @($script:Packs['en'].Keys | Where-Object { -not $script:Packs[$code].ContainsKey($_) }) | Should -BeNullOrEmpty
             @($script:Packs[$code].Keys | Where-Object { -not $script:Packs['en'].ContainsKey($_) }) | Should -BeNullOrEmpty
         }
     }
-    It 'alla paket har samma platshållare ({0}, {1} ...) som engelskan, och inga lösa klammrar' {
+    It 'every pack has the same placeholders ({0}, {1} ...) as English, and no stray braces' {
         foreach ($code in $script:Packs.Keys) {
             foreach ($k in $script:Packs[$code].Keys) {
                 $text = [string]$script:Packs[$code][$k]
@@ -43,7 +43,7 @@ Describe 'Språkpaketen' {
 }
 
 Describe 'Get-LanguageChain' {
-    It 'går från kod med region till språket och sist engelska' {
+    It 'goes from the code with a region to the language and last to English' {
         (Get-LanguageChain 'sv-SE') -join ',' | Should -Be 'sv-se,sv,en'
         (Get-LanguageChain 'sv') -join ',' | Should -Be 'sv,en'
         (Get-LanguageChain 'en') -join ',' | Should -Be 'en'
@@ -54,19 +54,19 @@ Describe 'Get-LanguageChain' {
 
 Describe 'Initialize-Language' {
     BeforeEach { $script:Warnings.Clear() }
-    It 'laddar svenska för sv, SV och sv-SE (språket utan region används när koden med region saknas)' {
+    It 'loads Swedish for sv, SV and sv-SE (the language without region is used when there is no pack for the code with a region)' {
         foreach ($c in 'sv', 'SV', 'sv-SE') {
             Initialize-Language $c | Should -Be 'sv'
             (T 'state.on') | Should -Be 'På'
         }
         $script:Warnings.Count | Should -Be 0
     }
-    It 'ger engelska för en och en-GB utan varning' {
+    It 'gives English for en and en-GB without a warning' {
         foreach ($c in 'en', 'EN', 'en-GB', '') { Initialize-Language $c | Should -Be 'en' }
         (T 'state.on') | Should -Be 'On'
         $script:Warnings.Count | Should -Be 0
     }
-    It 'varnar och ger engelska för språk som saknas eller är ogiltiga, och räknar upp paketen' {
+    It 'warns and gives English for languages that are missing or invalid, and lists the packs' {
         Initialize-Language 'xx' | Should -Be 'en'
         $script:Warnings[0] | Should -Match "No language pack for 'xx' \(available: en, sv\)"
         $script:Warnings.Clear()
@@ -83,15 +83,15 @@ Describe 'T' {
     }
     BeforeEach { $script:Warnings.Clear(); $script:BadLangKeys = $null; $real = $script:ScriptRoot; $script:ScriptRoot = $script:Fake; [void](Initialize-Language 'en'); $script:ScriptRoot = $real }
     AfterAll { $script:ScriptRoot = $script:Repo; $script:BadLangKeys = $null; [void](Initialize-Language 'en') }
-    It 'fyller i argument och låter {{ }} bli klammrar' {
+    It 'fills in the arguments and turns {{ }} into braces' {
         T 'ok' 'x' | Should -Be 'a x'
         T 'braces' 'z' | Should -Be 'x {y} z'
         T 'plain' | Should -Be 'no args'
     }
-    It 'visar [nyckel] för text som saknas' {
+    It 'shows [key] for a text that is missing' {
         T 'finns-inte' | Should -Be '[finns-inte]'
     }
-    It 'stoppar inte rapporten vid trasig platshållare: ger texten som den är och varnar en gång' {
+    It 'does not stop the report at a broken placeholder: gives the text as it is and warns once' {
         T 'bad' 'x' | Should -Be 'a {0} {1}'
         T 'bad' 'y' | Should -Be 'a {0} {1}'
         $script:Warnings.Count | Should -Be 1
@@ -100,7 +100,7 @@ Describe 'T' {
 }
 
 Describe 'Set-ThemeLanguage' {
-    It 'lägger till language i ett tema, byter det som finns, och klarar ett tomt tema {}' {
+    It 'adds language to a theme, replaces the one that is there, and handles an empty theme {}' {
         $f = Join-Path $TestDrive 't1.json'
         '{ "name": "A" }' | Set-Content $f -Encoding utf8
         Set-ThemeLanguage $f 'sv'

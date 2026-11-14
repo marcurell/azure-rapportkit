@@ -24,22 +24,26 @@ function ConvertTo-InvariantNumber($Text) {
     $null
 }
 
+# Severity as one of the codes of the contract: critical, high, medium, low or info (anything else, including nothing).
 function ConvertTo-SeverityCode($Text) {
     $s = ([string]$Text).Trim().ToLowerInvariant()
     if ($s -in 'critical', 'high', 'medium', 'low') { return $s }
     'info'
 }
 
+# A rule id made from a title, for sources that have no stable id of their own (older runs): "name-<title in lower case with dashes>".
 function ConvertTo-RuleSlug([string]$Text) { 'name-' + (([string]$Text).ToLowerInvariant() -replace '[^\p{L}\p{N}]+', '-').Trim('-') }
 
+# The rows of a CSV file (always an array), or none if the file does not exist.
 function Read-PackageCsv([string]$Path, [string]$Delimiter = ',') {
     if (-not (Test-Path -LiteralPath $Path)) { return @() }
     @(Import-Csv -LiteralPath $Path -Delimiter $Delimiter -Encoding UTF8)
 }
 
+# The file in $Dir (or below it) that matches $Filter. If a rerun in the same folder has left several, the newest is used.
 function Find-PackageFile([string]$Dir, [string]$Filter) {
     if (-not (Test-Path -LiteralPath $Dir)) { return $null }
-    Get-ChildItem -LiteralPath $Dir -Filter $Filter -Recurse -File -ErrorAction SilentlyContinue | Select-Object -First 1
+    Get-ChildItem -LiteralPath $Dir -Filter $Filter -Recurse -File -ErrorAction SilentlyContinue | Sort-Object LastWriteTime, Name -Descending | Select-Object -First 1
 }
 
 # One JSON object per line, UTF-8 without BOM. Returns the number of rows; writes nothing if there are none.
@@ -51,6 +55,7 @@ function Write-JsonLines([string]$Path, $Rows) {
     $list.Count
 }
 
+# SHA256 of a file as lower-case hex.
 function Get-FileSha256([string]$Path) {
     $sha = [System.Security.Cryptography.SHA256]::Create()
     $fs = [System.IO.File]::OpenRead($Path)
@@ -76,6 +81,7 @@ function New-StableGuid([string]$Seed) {
 
 # --- Sources -> rows -----------------------------------------------------------------------------------------------
 
+# azqr: findings (impacted.csv), the rules behind them (recommendations.csv) and the resources (inventory.csv).
 function Get-AzqrRows([string]$Dir) {
     $out = @{ Findings = @(); Rules = @(); Resources = @() }
     $imp = Find-PackageFile $Dir '*.impacted.csv'
@@ -178,6 +184,7 @@ function Get-PortalRows([string]$Dir, $SubIds, [string]$RunMonth) {
     $out
 }
 
+# Structure (struktur\*.csv): management groups and subscriptions as scopes, virtual networks and peerings.
 function Get-StructureRows([string]$Dir) {
     $out = @{ Scopes = @(); Networks = @(); Peerings = @() }
     $out.Scopes = @(Read-PackageCsv (Join-Path $Dir 'managementgrupper.csv') | ForEach-Object {
@@ -228,6 +235,9 @@ function Get-PackageSourceStates($Summary, $Present) {
 
 # --- Entry point ---------------------------------------------------------------------------------------------------
 
+# Writes the run package for the result folder $RunDir: manifest.json and data\*.jsonl in $OutDir (default <RunDir>\package).
+# $TenantId and $KitVersion override what run-summary.json says (needed for runs that have no summary).
+# Returns @{ OutDir; Manifest; Counts } (Counts = rows per data file).
 function New-RunPackage {
     param([Parameter(Mandatory)][string]$RunDir, [string]$OutDir, [string]$TenantId, [string]$KitVersion = '')
     if (-not (Test-Path -LiteralPath $RunDir)) { throw "Result folder not found: $RunDir" }

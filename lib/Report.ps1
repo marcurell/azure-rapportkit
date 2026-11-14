@@ -71,7 +71,7 @@ function ConvertTo-Number($v) {
 }
 
 # ===========================================================================
-# Tema
+# Theme
 # ===========================================================================
 
 # Built-in fallback theme: used if the theme is missing or invalid, and as a template for which values must exist.
@@ -141,7 +141,8 @@ function Get-BrandTheme([string]$Dir) {
     @{ Data = $theme; Dir = $dir; Source = $source }
 }
 
-# The logo as HTML: an image file from the theme folder (embedded as a data URI) or a wordmark of coloured text parts.
+# An image file from the theme folder as a data URI, so that the page needs no other files. Throws (with a text for the
+# warning) if the file is outside the theme folder, of an unsupported type, missing or larger than $MaxKB.
 function Get-ThemeImageUri($Theme, [string]$File, [int]$MaxKB = 300) {
     if (-not $Theme.Dir) { throw 'the theme has no folder' }
     $full = [IO.Path]::GetFullPath((Join-Path $Theme.Dir $File))
@@ -154,6 +155,7 @@ function Get-ThemeImageUri($Theme, [string]$File, [int]$MaxKB = 300) {
     'data:{0};base64,{1}' -f $mime, [Convert]::ToBase64String([IO.File]::ReadAllBytes($full))
 }
 
+# The logo as HTML: an image file from the theme folder (embedded as a data URI) or a wordmark of coloured text parts.
 function Get-LogoHtml($Theme) {
     $t = $Theme.Data
     $logo = $t.logo
@@ -368,12 +370,15 @@ function Get-RelativeResultPath($File) {
     $File.Name
 }
 
-# How many runs of a tool (distinct time stamps in the file names) the folder holds besides the newest one.
-function Get-OlderRunCount([string]$Dir, [string]$Filter, [string]$Pattern) {
-    $stamps = @(Get-ChildItem -LiteralPath $Dir -Filter $Filter -Recurse -ErrorAction SilentlyContinue | ForEach-Object { if ($_.FullName -match $Pattern) { $Matches[1] } } | Select-Object -Unique)
+# How many runs of a tool the folder holds besides the newest one: the number of distinct time stamps in the names of
+# $Files (the first group of $Pattern), minus one.
+function Get-OlderRunCount($Files, [string]$Pattern) {
+    $stamps = @($Files | ForEach-Object { if ($_.Name -match $Pattern) { $Matches[1] } } | Select-Object -Unique)
     [math]::Max(0, $stamps.Count - 1)
 }
 
+# Reads the results of the tools once and returns them as a hashtable ($d) that the page builders share: the rows of every
+# CSV file (or $null if a file is missing or has an unexpected format), flags for what exists, and the files that were used.
 function Get-ReportData {
     $d = @{}
     # The result files the report is built from (shown on the page About the run): @{ Tool; File; Modified }.
@@ -393,8 +398,9 @@ function Get-ReportData {
         $d.AzqrXlsx = Find-ResultFile $Dirs.azqr '*.xlsx'
     }
 
-    # Governance Visualizer
-    $gvAll = @(Get-ChildItem -LiteralPath $Dirs.azgovviz -Filter 'AzGovViz*.html' -Recurse -ErrorAction SilentlyContinue)
+    # Governance Visualizer. The folder is listed once (a large environment gives thousands of files) and searched in memory.
+    $gvFiles = @(Get-ChildItem -LiteralPath $Dirs.azgovviz -Recurse -File -ErrorAction SilentlyContinue)
+    $gvAll = @($gvFiles | Where-Object { $_.Name -like 'AzGovViz*.html' })
     # The main report is called AzGovViz_<version>_<date>_<time>_<tenant ID>.html. The others (DefinitionInsights, one per subscription)
     # are page reports and can be very large, so do not just pick the first file.
     $d.GvMain = $gvAll | Where-Object { $_.Name -match '_\d{8}_\d{6}_[0-9a-fA-F-]{36}\.html$' } | Sort-Object LastWriteTime, Name -Descending | Select-Object -First 1
@@ -402,9 +408,17 @@ function Get-ReportData {
     $d.GvOthers = @($gvAll | Where-Object { $d.GvMain -and $_.FullName -ne $d.GvMain.FullName })
     $d.GvPresent = [bool]$d.GvMain
     & $addUsed 'Governance Visualizer' $d.GvMain
-    $d.OlderGvRuns = Get-OlderRunCount $Dirs.azgovviz 'AzGovViz*.html' '_(\d{8}_\d{6})_[0-9a-fA-F-]{36}\.html$'
+    $d.OlderGvRuns = Get-OlderRunCount $gvAll '_(\d{8}_\d{6})_[0-9a-fA-F-]{36}\.html$'
     if ($d.GvPresent) {
-        $get = { param($suffix, $req) $f = Find-ResultFile $Dirs.azgovviz "*_$suffix.csv"; if ($f) { Import-CsvChecked $f.FullName $req ';' } else { $null } }
+        # The data files are named after the main report (<main report name>_<suffix>.csv). The file of the same run is used, so that
+        # data from different runs is never mixed; if it is missing (an unexpected name) the newest file with that suffix is used.
+        $get = {
+            param($suffix, $req)
+            $candidates = @($gvFiles | Where-Object { $_.Name -like "*_$suffix.csv" })
+            $f = $candidates | Where-Object { $_.Name -eq "$($d.GvMain.BaseName)_$suffix.csv" } | Select-Object -First 1
+            if (-not $f) { $f = $candidates | Sort-Object LastWriteTime, Name -Descending | Select-Object -First 1 }
+            if ($f) { Import-CsvChecked $f.FullName $req ';' } else { $null }
+        }
         $d.GvRoles = Get-UniqueRows (& $get 'RoleAssignments' @('RoleClear', 'ObjectType', 'ScopeTenOrMgOrSubOrRGOrRes')) 'RoleAssignmentId'
         $pa = & $get 'PolicyAssignments' @('PolicyAssignmentDisplayName')
         # The row for the assignment's own scope (thisScope) comes first, so that it is the one that is kept.
@@ -420,11 +434,12 @@ function Get-ReportData {
     $d.MaesterPresent = $false
     # The newest TestResults-<time>.json is used (the names sort by time). maester.json is the collector's own summary: it is only a fallback,
     # because it can be left over from an earlier run in the same folder.
-    $mFiles = @(Get-ChildItem -LiteralPath $Dirs.maester -Filter '*.json' -Recurse -ErrorAction SilentlyContinue | Where-Object { $_.FullName -like '*test-results*' })
+    $mAll = @(Get-ChildItem -LiteralPath $Dirs.maester -Recurse -File -ErrorAction SilentlyContinue | Where-Object { $_.FullName -like '*test-results*' })
+    $mFiles = @($mAll | Where-Object Extension -eq '.json')
     $mj = $mFiles | Where-Object Name -like 'TestResults-*.json' | Sort-Object Name -Descending | Select-Object -First 1
     if (-not $mj) { $mj = $mFiles | Where-Object Name -eq 'maester.json' | Select-Object -First 1 }
     & $addUsed 'Maester' $mj
-    $d.OlderMaesterRuns = Get-OlderRunCount $Dirs.maester 'TestResults-*.json' 'TestResults-(\d{4}-\d{2}-\d{2}-\d{6})\.json$'
+    $d.OlderMaesterRuns = Get-OlderRunCount $mFiles 'TestResults-(\d{4}-\d{2}-\d{2}-\d{6})\.json$'
     if ($mj) {
         try {
             $m = Get-Content -LiteralPath $mj.FullName -Raw | ConvertFrom-Json
@@ -434,8 +449,11 @@ function Get-ReportData {
             else { $d.Maester = $m; $d.MaesterPresent = $true }
         }
         catch { Add-Warning "maester.json could not be read: $($_.Exception.Message)" }
-        # Every Maester run in the same folder leaves its own timestamped TestResults-<time>.html; the name sorts by time, so link to the newest.
-        $d.MaesterHtml = Get-ChildItem -LiteralPath $Dirs.maester -Filter '*.html' -Recurse -ErrorAction SilentlyContinue | Where-Object { $_.FullName -like '*test-results*' } | Sort-Object Name -Descending | Select-Object -First 1
+        # Every Maester run in the same folder leaves its own timestamped TestResults-<time>.html. Link to the one of the same run as
+        # the JSON file (same name), otherwise to the newest (the names sort by time).
+        $mHtml = @($mAll | Where-Object Extension -eq '.html')
+        $d.MaesterHtml = $mHtml | Where-Object BaseName -eq $mj.BaseName | Select-Object -First 1
+        if (-not $d.MaesterHtml) { $d.MaesterHtml = $mHtml | Sort-Object Name -Descending | Select-Object -First 1 }
         & $addUsed 'Maester (HTML)' $d.MaesterHtml
     }
 
@@ -587,7 +605,11 @@ function Get-EntraPageHtml($d) {
     if (-not $d.MaesterPresent) { return (New-NoDataHtml (T 'entra.none.what') (T 'entra.none.why')) }
     $m = $d.Maester
     $sb = [System.Text.StringBuilder]::new()
-    [void]$sb.Append('<div class="tiles">' + (Tile (T 'tile.passed') $m.PassedCount 'ok') + (Tile (T 'tile.failed') $m.FailedCount 'high') + (Tile (T 'tile.skipped') $m.SkippedCount) + '</div>')
+    # Tests that ended with an error have no result (typically because Microsoft Graph limited the requests). They are neither
+    # passed nor failed, so they get a tile and a note of their own instead of being left out.
+    $errors = if (@($m.PSObject.Properties.Name) -contains 'ErrorCount') { [int]$m.ErrorCount } else { 0 }
+    [void]$sb.Append('<div class="tiles">' + (Tile (T 'tile.passed') $m.PassedCount 'ok') + (Tile (T 'tile.failed') $m.FailedCount 'high') + (Tile (T 'tile.skipped') $m.SkippedCount) + $(if ($errors -gt 0) { Tile (T 'tile.errors') $errors 'medium' } else { '' }) + '</div>')
+    if ($errors -gt 0) { [void]$sb.Append((New-Callout (Esc (T 'entra.errorsNote' $errors)) -Warn)) }
     $failed = @($m.Tests | Where-Object Result -eq 'Failed' | Select-Object -First 40 | ForEach-Object { [pscustomobject]@{ Result = 'Failed'; Test = $_.Name } })
     [void]$sb.Append('<h2>' + (Esc (T 'entra.failedTests')) + '</h2>' + (ConvertTo-HtmlTable $failed @(@{Name='Result';Label=(T 'col.result')}, @{Name='Test';Label=(T 'col.test')}) 40))
 
@@ -774,7 +796,7 @@ function Get-OverviewPageHtml($d, $Pages) {
         if ($priv) { $obs.Add((T 'obs.governance.html' $priv $file.styrning)) }
     }
     if ($d.Vnets) {
-        $m = Get-NetworkModel $d
+        $m = Get-CachedNetworkModel $d
         $iso = @($m.Vnets | Where-Object { $m.Role[([string]$_.Id).ToLower()] -eq 'Isolated' }).Count
         $notConn = @($m.Edges | Where-Object State -eq 'bad').Count
         if ($iso -or $notConn -or $m.Overlaps.Count) { $obs.Add((T 'obs.network.html' $iso $notConn $m.Overlaps.Count $file.struktur)) }

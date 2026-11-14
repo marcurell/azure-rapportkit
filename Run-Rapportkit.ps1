@@ -53,8 +53,12 @@
   Root folder for results and downloaded tools. If it is not given the script asks where it should be (suggestion: %USERPROFILE%\rapportkit).
 .PARAMETER Period
   Name of the subfolder for this run. Default is the current month (yyyy-MM).
-.PARAMETER SkipGovViz / SkipAzqr / SkipMaester
-  Skip the respective tool.
+.PARAMETER SkipGovViz
+  Skip Azure Governance Visualizer (step 6).
+.PARAMETER SkipAzqr
+  Skip Azure Quick Review, azqr (step 7).
+.PARAMETER SkipMaester
+  Skip Maester, the Entra ID tests (step 8).
 .PARAMETER DeviceLogin
   Sign in with a code (https://login.microsoft.com/device) instead of a browser window.
 .PARAMETER NoInstall
@@ -156,10 +160,10 @@ $TotalSteps = 10
 # Governance Visualizer is fetched as a fixed version (the one that was tested). Changed on purpose, not by accident.
 $GvVersion = '6.7.2'
 $GvUrl = "https://github.com/Azure/Azure-Governance-Visualizer/archive/refs/tags/$GvVersion.zip"
-$KitVersion = '1.5.1'
+$KitVersion = '1.5.2'
 
-# Tested (pinned) tool versions, and checksums (SHA256) for the zip files that are fetched directly. The customer then gets
-# the same tools that we tested, and a changed file is detected. Tools installed via winget are checked by winget
+# Tested (pinned) tool versions, and checksums (SHA256) for the zip files that are fetched directly. Every run then uses
+# the same tools that were tested, and a changed file is detected. Tools installed via winget are checked by winget
 # itself against its manifest. -LatestTools switches to the latest versions and turns the checksums off.
 $Pins = @{
     Azqr         = '4.3.0'
@@ -223,9 +227,17 @@ function Initialize-Log([string]$Dir) {
 }
 
 # --- Helper functions for text and frames
+# A number as text with a decimal point whatever the language setting of the computer ("258.26", never "258,26"), for the
+# CSV files: they are compared between runs and read on other computers. Empty for no value.
+function ConvertTo-InvariantText($Number) {
+    if ($null -eq $Number -or "$Number" -eq '') { return '' }
+    ([double]$Number).ToString([System.Globalization.CultureInfo]::InvariantCulture)
+}
+# A duration as text: "42 s" or "3 min 07 s". The seconds are rounded down, so that 119.7 s is "1 min 59 s" and never "1 min 60 s".
 function Format-Duration([double]$Sec) {
-    if ($Sec -lt 60) { return ('{0:N0} s' -f $Sec) }
-    '{0} min {1:00} s' -f [int][math]::Floor($Sec / 60), [int]($Sec % 60)
+    $whole = [int][math]::Floor($Sec)
+    if ($whole -lt 60) { return ('{0} s' -f $whole) }
+    '{0} min {1:00} s' -f [int][math]::Floor($whole / 60), ($whole % 60)
 }
 # Wraps text at words so that no line gets longer than $Width.
 function Format-Wrap([string]$Text, [int]$Width, [string]$Indent = '') {
@@ -248,6 +260,7 @@ function Write-BoxLine($Segments, [string]$EdgeColor = 'DarkCyan', [switch]$Doub
     foreach ($s in $Segments) { Write-Host ([string]$s[0]) -NoNewline -ForegroundColor $s[1] }
     Write-Host ((' ' * [math]::Max(0, $UiWidth - 2 - $len)) + $edge) -ForegroundColor $EdgeColor
 }
+# A status label: the text centred in a coloured field nine characters wide.
 function Write-Badge([string]$Text, [string]$Color) {
     $w = 9
     $pad = [int][math]::Floor(($w - $Text.Length) / 2)
@@ -276,6 +289,8 @@ function Complete-Step {
         $script:CurStart = $null
     }
 }
+# Starts a main step: closes the one before, then draws the box with the step number, the progress bar and the heading, and
+# writes the explanation (what the step does and how long it usually takes) under it.
 function Write-Step([int]$Number, [string]$Title, [string]$Explain) {
     Complete-Step
     $script:CurStep = $Number; $script:CurTitle = $Title; $script:CurStart = Get-Date
@@ -308,6 +323,7 @@ function Write-Check([string]$State, [string]$Name, [string]$Detail) {
     Write-Log $State "${Name}: $Detail"
     Write-Line $State $color "${Name}: $Detail" $msgColor
 }
+# A "key   value" line (tenant, period, result folder) under the banner.
 function Write-KeyValue([string]$Key, [string]$Value) {
     Write-Host ('   {0,-11}' -f $Key) -NoNewline -ForegroundColor DarkGray
     Write-Host $Value -ForegroundColor White
@@ -327,7 +343,7 @@ function Write-Banner {
     Write-Log 'INFO' "Azure Rapportkit v$KitVersion starting"
 }
 
-# --- Status label for a summary line
+# --- Status label for a summary line: the text and colour for a state (OK, Failed, Partial; anything else counts as skipped).
 function Get-StateBadge([string]$State) {
     switch ($State) {
         'OK'     { return @('OK', 'Green') }
@@ -366,9 +382,9 @@ function Write-SummaryBox($StatusTable, $Facts) {
     }
     Write-Host ($G.H * $UiWidth) -ForegroundColor DarkCyan
 }
+
 # ===========================================================================
-# ===========================================================================
-# Felhantering
+# Error handling
 # ===========================================================================
 
 # Aborts the whole run with a clear message. $Fix = what the user should do.
@@ -387,7 +403,7 @@ function Get-ErrorText($err) {
 }
 
 # Recognises common sign-in errors in corporate environments (Conditional Access, MFA, compliant device, blocked app) and
-# gives a text that the customer can take to their IT department. Empty string if nothing is recognised.
+# gives a text that can be taken to the IT department. Empty string if nothing is recognised.
 function Get-SignInHelp([string]$Text) {
     if ($Text -match 'AADSTS(53000|53001|53002|53003|53004|530003|530004|50105|50020|700016|65001|900144|50076|50079|50158)|[Cc]onditional [Aa]ccess|compliant|blocked by|not compliant|device (is )?not') {
         return ' This looks like the tenant''s Conditional Access or a consent setting is stopping the sign-in. Ask IT to allow the apps "Microsoft Azure CLI", "Azure PowerShell" and "Microsoft Graph Command Line Tools" for your account, or run the script from a managed/compliant computer.'
@@ -461,8 +477,9 @@ function Test-ActionAllowed($Perms, [string]$Action) {
     return $false
 }
 
-# Calls Azure Resource Manager via az rest (no az extension needed). Tries 3 times on
-# throttling (429). Throws an error with Azure's message if the call fails.
+# Calls Azure Resource Manager via az rest (no az extension needed). On throttling (429) it waits and tries again, up to
+# 5 attempts in all. Throws an error with Azure's message if the call fails. The error text (stderr) is captured in the
+# same call, so a failed or throttled request is not sent a second time just to read the message.
 function Invoke-ArmRest([string]$Method, [string]$Url, $Body) {
     # The query string is sent as --url-parameters: an & in --url is otherwise split by cmd.exe (az is a .cmd file) and everything after it disappears.
     # The values are decoded first, because az encodes them again.
@@ -475,9 +492,10 @@ function Invoke-ArmRest([string]$Method, [string]$Url, $Body) {
         [IO.File]::WriteAllText($tmp, ($Body | ConvertTo-Json -Depth 8))
         $azArgs += @('--body', "@$tmp")
     }
+    $errFile = Join-Path $env:TEMP ('azrest-' + [guid]::NewGuid().ToString('N') + '.err')
     try {
         for ($i = 1; $i -le 5; $i++) {
-            $out = & az @azArgs 2>$null
+            $out = & az @azArgs 2>$errFile
             $code = $LASTEXITCODE
             # Some APIs (for example Defender) give exit code 1 despite a complete response. Valid JSON without an error field is accepted.
             $text = ($out | Out-String).Trim()
@@ -485,16 +503,14 @@ function Invoke-ArmRest([string]$Method, [string]$Url, $Body) {
                 try { $parsed = $text | ConvertFrom-Json; if ($code -eq 0 -or -not $parsed.error) { return $parsed } } catch { }
             }
             if ($code -eq 0) { return $null }
-            # Run again with stderr to get the error message.
-            $txt = (& az @azArgs 2>&1 | Out-String).Trim()
-            if ($LASTEXITCODE -eq 0) { return ($txt | ConvertFrom-Json) }
-            # Throttling (Cost Management is strict): wait longer each time and try again, up to 5 times.
+            $txt = (($text, (Get-Content -LiteralPath $errFile -Raw -ErrorAction SilentlyContinue)) -join "`n").Trim()
+            # Throttling (Cost Management is strict): wait longer each time and try again.
             if ($txt -match 'TooManyRequests|Too Many Requests|429' -and $i -lt 5) { Write-Host "      (throttled by Azure, waiting $(15 * $i) s and trying again)" -ForegroundColor DarkGray; Start-Sleep -Seconds (15 * $i); continue }
             $short = ($txt -split "`n" | Where-Object { $_ -match 'ERROR|Error|error|message' } | Select-Object -First 1)
             throw $(if ($short) { $short.Trim() } else { $txt })
         }
     }
-    finally { if ($tmp) { Remove-Item $tmp -Force -ErrorAction SilentlyContinue } }
+    finally { Remove-Item $errFile -Force -ErrorAction SilentlyContinue; if ($tmp) { Remove-Item $tmp -Force -ErrorAction SilentlyContinue } }
 }
 
 # Checks the roles of the signed-in account (Azure at tenant root, Entra via Graph) against what the chosen tools need.
@@ -642,7 +658,7 @@ function Select-OutputRoot([string]$Given) {
 }
 
 # Signs out of the sessions the script created itself (a sign-in that existed before is not touched), unless -KeepLogin is set.
-# On a customer's computer no tokens should remain after the run.
+# On a computer that is not your own no tokens should remain after the run.
 function Invoke-SessionCleanup {
     $targets = [System.Collections.Generic.List[string]]::new()
     if ($azReady -and -not $azWasLoggedIn) { $targets.Add('Azure CLI') }
@@ -652,7 +668,7 @@ function Invoke-SessionCleanup {
     $list = $targets -join ', '
     if ($KeepLogin) { Write-Action "The sign-ins ($list) are left in place (-KeepLogin)."; return }
     Write-Host ''
-    if (-not (Read-YesNo "Sign out of $list, which the script signed in to? (recommended on a customer's computer)" $true)) { Write-Action "The sign-ins ($list) are left in place."; return }
+    if (-not (Read-YesNo "Sign out of $list, which the script signed in to? (recommended if this is not your own computer)" $true)) { Write-Action "The sign-ins ($list) are left in place."; return }
     if ($targets -contains 'Azure CLI') { try { az logout 2>$null | Out-Null; Write-Ok 'Signed out of Azure CLI' } catch { Write-Warn2 'Could not sign out of Azure CLI (run az logout).' } }
     if ($targets -contains 'Azure PowerShell') { try { Disconnect-AzAccount -ErrorAction Stop | Out-Null; Write-Ok 'Signed out of Azure PowerShell' } catch { Write-Warn2 'Could not sign out of Azure PowerShell (run Disconnect-AzAccount).' } }
     if ($targets -contains 'Microsoft Graph') { try { Disconnect-MgGraph -ErrorAction Stop | Out-Null; Write-Ok 'Signed out of Microsoft Graph' } catch { Write-Warn2 'Could not sign out of Microsoft Graph (run Disconnect-MgGraph).' } }
@@ -856,9 +872,11 @@ function Install-AzureCli {
 # accepted version $Pin (the tested version) is fetched, or the latest within the range if $Pin is missing (-LatestTools).
 # The version is checked: Windows has for example a built-in Pester 3.4 that is no use to Maester (needs 5.5+).
 function Install-PsModule([string]$Name, [string]$Pin, [string]$MinVersion, [string]$MaxVersion) {
-    $have = @(Get-Module -ListAvailable -Name $Name)
-    if ($MinVersion) { $have = @($have | Where-Object { $_.Version -ge [version]$MinVersion }) }
-    if ($MaxVersion) { $have = @($have | Where-Object { $_.Version -lt [version]$MaxVersion }) }
+    # The installed versions of the module that are within the accepted range, highest first.
+    $accepted = {
+        @(Get-Module -ListAvailable -Name $Name | Where-Object { (-not $MinVersion -or $_.Version -ge [version]$MinVersion) -and (-not $MaxVersion -or $_.Version -lt [version]$MaxVersion) } | Sort-Object Version -Descending)
+    }
+    $have = & $accepted
     if ($have.Count) { Write-Ok "Module $Name already exists (version $($have[0].Version))"; return }
     if (Test-Path "$ToolsDir\modules\$Name") {            # offline-bundle
         Write-Action "Copying module $Name from tools\modules"
@@ -887,11 +905,11 @@ function Install-PsModule([string]$Name, [string]$Pin, [string]$MinVersion, [str
         catch { Fail "Could not fetch the module $Name from PowerShell Gallery: $($_.Exception.Message)" 'Check the internet connection (www.powershellgallery.com) and run the script again.' }
     }
     else { Fail "The module $Name does not exist in tools\modules and -Offline is set." 'Rebuild the bundle with Build-Bundle.ps1 or run without -Offline.' }
-    $have = @(Get-Module -ListAvailable -Name $Name)
-    if ($MinVersion) { $have = @($have | Where-Object { $_.Version -ge [version]$MinVersion }) }
+    $have = & $accepted
     if (-not $have.Count) { Fail "The module $Name was fetched but could not be found in $ModDir." 'Delete the folder and run the script again.' }
     Write-Ok "Module $Name ready (version $($have[0].Version))"
 }
+
 # Reads a CSV file and checks that the expected columns exist. Gives $null (and a warning) if
 # the file cannot be read or has an unexpected format, so that the rest of the report can still be built.
 function Import-CsvChecked([string]$Path, [string[]]$Required, [string]$Delimiter = ',') {
@@ -1008,6 +1026,10 @@ try {
         # -ReportOnly reads the results of an earlier run in <OutputRoot>\<Period>\ and keeps them (they are not ours to delete).
         if (-not $ReportOnly) { $RunDir = Join-Path ([System.IO.Path]::GetTempPath()) ('rk-' + [guid]::NewGuid().ToString('N').Substring(0, 8)); $WorkDirIsTemp = $true }
     }
+    # -ReportOnly needs the results of an earlier run: say so right away instead of building an empty report.
+    if ($ReportOnly -and -not (Test-Path -LiteralPath $RunDir)) {
+        Fail "There is no earlier run to build a report from: the folder $RunDir does not exist." 'Check -OutputRoot and -Period (the name of the subfolder, for example 2026-10), or run without -ReportOnly.'
+    }
     $ModDir = Join-Path $OutputRoot '_modules'
     $GvDir = Join-Path $OutputRoot "Azure-Governance-Visualizer-$GvVersion"
     $Dirs = @{}
@@ -1021,7 +1043,11 @@ try {
         $probe = Join-Path $RunDir '.write-test'
         Set-Content -Path $probe -Value 'x'; Remove-Item $probe -Force
     }
-    catch { Fail "Cannot write to $OutputRoot ($($_.Exception.Message))." 'Choose another folder with -OutputRoot (for example C:\Users\<you>\rapportkit) and run again.' }
+    catch {
+        # In an anonymized run the tools write to a temporary working folder, so that is where the write can have failed.
+        $where = if ($WorkDirIsTemp) { "$OutputRoot or the temporary working folder $RunDir" } else { $OutputRoot }
+        Fail "Cannot write to $where ($($_.Exception.Message))." 'Choose another folder with -OutputRoot (for example C:\Users\<you>\rapportkit) and run again.'
+    }
     if ($env:PSModulePath -notlike "*$ModDir*") { $env:PSModulePath = "$ModDir;$env:PSModulePath" }
     if ($Anonymize) {
         Write-Ok "Anonymized result: $AnonOutDir (the only thing that is kept)"
@@ -1123,7 +1149,7 @@ try {
             if (@($need -match 'PSGallery').Count) { $endpoints += , @('www.powershellgallery.com', 'https://www.powershellgallery.com', 'fetches PowerShell modules') }
         }
         $endpoints += , @('login.microsoftonline.com', 'https://login.microsoftonline.com', 'sign-in')
-        if (-not $SkipGovViz -or -not $SkipAzqr) { $endpoints += , @('management.azure.com', 'https://management.azure.com', 'Azure Resource Manager') }
+        if (-not $SkipGovViz -or -not $SkipAzqr -or -not $SkipPortal) { $endpoints += , @('management.azure.com', 'https://management.azure.com', 'Azure Resource Manager') }
         if (-not $SkipMaester) { $endpoints += , @('graph.microsoft.com', 'https://graph.microsoft.com', 'Microsoft Graph (Maester)') }
         foreach ($e in $endpoints) {
             if (Test-Endpoint $e[1]) { Add-Check 'OK' "Network $($e[0])" $e[2] }
@@ -1344,7 +1370,7 @@ try {
             catch { Set-Status 'Governance Visualizer' 'Failed' (Get-ErrorText $_); Write-Warn2 (Get-ErrorText $_); $SkipGovViz = $true }
         }
 
-        # 3c. Microsoft Graph for Maester (optional; requires admin consent the first time)
+        # 5b. Microsoft Graph for Maester (optional; requires admin consent the first time)
         if (-not $SkipMaester) {
             Write-Host '  Maester reads Entra ID via Microsoft Graph. The first time a Global Administrator must approve the permissions.'
             try { $ans = Read-Host '  Sign in to Microsoft Graph for Maester now? (y/N)' } catch { $ans = 'n' }
@@ -1359,7 +1385,7 @@ try {
             }
         }
 
-        # 4d. Permission check: can the account see the management group that Governance Visualizer starts at?
+        # 5c. Permission check: can the account see the management group that Governance Visualizer starts at?
         # If an error is expected you can choose to run anyway or skip the tool.
         if (-not $SkipGovViz) {
             $mgCheck = if ($ManagementGroupId) { $ManagementGroupId } else { $TenantId }
@@ -1403,7 +1429,7 @@ try {
                 # comment out every "Pause" in the fetched copy.
                 if ($src -notmatch 'RAPPORTKIT-NOPAUSE') {
                     $src2 = Get-Content $gvScript -Raw
-                    $noPause = [regex]::Replace($src2, '(?m)^(\s*)Pause\s*$', '$1# Pause (borttagen av rapportkit) RAPPORTKIT-NOPAUSE')
+                    $noPause = [regex]::Replace($src2, '(?m)^(\s*)Pause\s*$', '$1# Pause (removed by rapportkit) RAPPORTKIT-NOPAUSE')
                     if ($noPause -eq $src2) { Add-Warning 'Found no pauses to remove in Governance Visualizer (the tool may wait for a key press).' }
                     else { Set-Content $gvScript $noPause -Encoding utf8 }
                 }
@@ -1412,7 +1438,7 @@ try {
                 # error, so we skip just that call: the function gets the same response as when the listing failed.
                 if ($src -notmatch 'RAPPORTKIT-NOCLASSIC') {
                     $src3 = Get-Content $gvScript -Raw
-                    $noClassic = [regex]::Replace($src3, '(?s)(function dataCollectionClassicAdministratorsSub \{.*?)\$AzApiCallResult = AzAPICall @azAPICallPayload', "`$1`$AzApiCallResult = 'ClassicAdministratorListFailed' # RAPPORTKIT-NOCLASSIC (API pensionerat)")
+                    $noClassic = [regex]::Replace($src3, '(?s)(function dataCollectionClassicAdministratorsSub \{.*?)\$AzApiCallResult = AzAPICall @azAPICallPayload', "`$1`$AzApiCallResult = 'ClassicAdministratorListFailed' # RAPPORTKIT-NOCLASSIC (the API is retired)")
                     if ($noClassic -eq $src3) { Add-Warning 'Could not skip classic administrators in Governance Visualizer (may stop on older subscription types).' }
                     else { Set-Content $gvScript $noClassic -Encoding utf8 }
                 }
@@ -1562,8 +1588,15 @@ try {
             $portalErrors = [System.Collections.Generic.List[string]]::new()
             $portalOk = 0
             $srcFail = @{ plans = 0; secureScore = 0; secureScoreControls = 0; recommendations = 0; cost = 0 }   # failed subscriptions per source (for run-summary.json)
+            # A file is only written when its source gave rows, so the files of an earlier run in the same folder are removed first:
+            # otherwise a source that fails or is empty this time would show the old data in the report as if it were new.
+            foreach ($old in 'defender-planer.csv', 'secure-score.csv', 'secure-score-kontroller.csv', 'defender-rekommendationer.csv', 'kostnad.csv') {
+                Remove-Item -LiteralPath (Join-Path $Dirs.portal $old) -Force -ErrorAction SilentlyContinue
+            }
+            $allSubs = $null      # every active subscription the account sees (also used for the structure further down)
             try {
-                $subs = @(az account list -o json 2>$null | ConvertFrom-Json | Where-Object { $_.state -eq 'Enabled' } | Sort-Object name)
+                $allSubs = @(az account list -o json 2>$null | ConvertFrom-Json | Where-Object { $_.state -eq 'Enabled' } | Sort-Object name)
+                $subs = $allSubs
                 if ($subs.Count -gt $MaxPortalSubscriptions) {
                     Add-Warning "The account sees $($subs.Count) active subscriptions. Defender and cost are fetched only for the first $MaxPortalSubscriptions (alphabetically): change with -MaxPortalSubscriptions."
                     $subs = @($subs | Select-Object -First $MaxPortalSubscriptions)
@@ -1589,7 +1622,7 @@ try {
                     # Secure Score
                     try {
                         $r = Invoke-ArmRest 'GET' "https://management.azure.com/subscriptions/$sid/providers/Microsoft.Security/secureScores?api-version=2020-01-01"
-                        foreach ($sc in @($r.value)) { $scoreRows.Add([pscustomobject]@{ PrenumerationId = $sid; Prenumeration = $sname; Poang = $sc.properties.score.current; Max = $sc.properties.score.max; Andel = $sc.properties.score.percentage }) }
+                        foreach ($sc in @($r.value)) { $scoreRows.Add([pscustomobject]@{ PrenumerationId = $sid; Prenumeration = $sname; Poang = (ConvertTo-InvariantText $sc.properties.score.current); Max = (ConvertTo-InvariantText $sc.properties.score.max); Andel = (ConvertTo-InvariantText $sc.properties.score.percentage) }) }
                         $portalOk++
                     }
                     catch { $srcFail.secureScore++; $portalErrors.Add("Secure Score ($sname): $($_.Exception.Message)") }
@@ -1598,7 +1631,7 @@ try {
                     # individual recommendations can be incomplete: the controls show how many resources are unhealthy.
                     try {
                         $r = Invoke-ArmRest 'GET' "https://management.azure.com/subscriptions/$sid/providers/Microsoft.Security/secureScoreControls?api-version=2020-01-01"
-                        foreach ($c in @($r.value)) { $ctrlRows.Add([pscustomobject]@{ PrenumerationId = $sid; Prenumeration = $sname; KontrollId = $c.name; Kontroll = $c.properties.displayName; Poang = $c.properties.score.current; Max = $c.properties.score.max; Osunda = [int]$c.properties.unhealthyResourceCount; Friska = [int]$c.properties.healthyResourceCount }) }
+                        foreach ($c in @($r.value)) { $ctrlRows.Add([pscustomobject]@{ PrenumerationId = $sid; Prenumeration = $sname; KontrollId = $c.name; Kontroll = $c.properties.displayName; Poang = (ConvertTo-InvariantText $c.properties.score.current); Max = (ConvertTo-InvariantText $c.properties.score.max); Osunda = [int]$c.properties.unhealthyResourceCount; Friska = [int]$c.properties.healthyResourceCount }) }
                         $portalOk++
                     }
                     catch { $srcFail.secureScoreControls++; $portalErrors.Add("Secure Score controls ($sname): $($_.Exception.Message)") }
@@ -1622,9 +1655,12 @@ try {
                     }
                     catch { $srcFail.recommendations++; $portalErrors.Add("Defender recommendations ($sname): $($_.Exception.Message)") }
 
-                    # Cost per month, the last 12 months (Cost Management allows at most one year)
+                    # Cost per month: this month so far and the eleven whole months before it. The period starts on the first of a
+                    # month, so that no month but the current one is partial (a period of "today minus a year" begins in the middle of
+                    # a month, and that month then looks cheaper than it was). Cost Management allows at most one year per query.
                     try {
-                        $from = (Get-Date).AddDays(-364).ToString('yyyy-MM-dd'); $to = (Get-Date).ToString('yyyy-MM-dd')
+                        $today = Get-Date
+                        $from = (Get-Date -Year $today.Year -Month $today.Month -Day 1).AddMonths(-11).ToString('yyyy-MM-dd'); $to = $today.ToString('yyyy-MM-dd')
                         $costBody = @{ type = 'ActualCost'; timeframe = 'Custom'; timePeriod = @{ from = "${from}T00:00:00+00:00"; to = "${to}T23:59:59+00:00" }
                                        dataset = @{ granularity = 'Monthly'; aggregation = @{ totalCost = @{ name = 'Cost'; function = 'Sum' } } } }
                         $r = Invoke-ArmRest 'POST' "https://management.azure.com/subscriptions/$sid/providers/Microsoft.CostManagement/query?api-version=2023-03-01" $costBody
@@ -1637,17 +1673,18 @@ try {
                             $mv = $row[$iMonth]
                             $ms = if ($mv -is [datetime]) { $mv.ToString('yyyy-MM-dd', [System.Globalization.CultureInfo]::InvariantCulture) } else { [string]$mv }
                             $month = if ($ms -match '^\d{8}$') { $ms.Substring(0, 4) + '-' + $ms.Substring(4, 2) } else { $ms.Substring(0, [Math]::Min(7, $ms.Length)) }
-                            $costRows.Add([pscustomobject]@{ PrenumerationId = $sid; Prenumeration = $sname; Manad = $month; Kostnad = [math]::Round([double]$row[$iCost], 2); Valuta = $(if ($iCur -ge 0) { $row[$iCur] } else { '' }) })
+                            $costRows.Add([pscustomobject]@{ PrenumerationId = $sid; Prenumeration = $sname; Manad = $month; Kostnad = (ConvertTo-InvariantText ([math]::Round([double]$row[$iCost], 2))); Valuta = $(if ($iCur -ge 0) { $row[$iCur] } else { '' }) })
                         }
                         $portalOk++
                     }
                     catch { $srcFail.cost++; $portalErrors.Add("Cost ($sname): $($_.Exception.Message)") }
                 }
 
-                # Save as CSV (UTF-8 with BOM so that Excel shows å/ä/ö correctly)
+                # Save as CSV (UTF-8 with BOM so that Excel shows non-ASCII characters correctly). -NoTypeInformation is not given: it is the
+                # default in PowerShell 7, where this step always runs, and newer versions warn that the parameter is obsolete.
                 $save = @(@('defender-planer.csv', $planRows), @('secure-score.csv', $scoreRows), @('secure-score-kontroller.csv', $ctrlRows), @('defender-rekommendationer.csv', $recRows), @('kostnad.csv', $costRows))
                 foreach ($sv in $save) {
-                    if ($sv[1].Count) { $sv[1] | Export-Csv -Path (Join-Path $Dirs.portal $sv[0]) -NoTypeInformation -Encoding utf8BOM; Write-Ok "$($sv[0]): $($sv[1].Count) rows" }
+                    if ($sv[1].Count) { $sv[1] | Export-Csv -Path (Join-Path $Dirs.portal $sv[0]) -Encoding utf8BOM; Write-Ok "$($sv[0]): $($sv[1].Count) rows" }
                 }
                 # Does the recommendation list match the controls? Otherwise Azure's list (a quirk of the API) has lost unhealthy resources.
                 $ctrlUnhealthy = [int](($ctrlRows | Measure-Object -Property Osunda -Sum).Sum)
@@ -1676,7 +1713,8 @@ try {
             try {
                 . (Join-Path $ScriptRoot 'lib\Structure.ps1')
                 $structErrors = [System.Collections.Generic.List[string]]::new()
-                $subIds = @(az account list -o json 2>$null | ConvertFrom-Json | Where-Object { $_.state -eq 'Enabled' } | ForEach-Object { $_.id })
+                if ($null -eq $allSubs) { $allSubs = @(az account list -o json 2>$null | ConvertFrom-Json | Where-Object { $_.state -eq 'Enabled' }) }
+                $subIds = @($allSubs | ForEach-Object { $_.id })
                 $rootMg = if ($ManagementGroupId) { $ManagementGroupId } else { $TenantId }
                 $summary = Save-StructureData $Dirs.struktur $rootMg $subIds $structErrors
                 if ($structErrors.Count -eq 0) { Set-Status 'Structure' 'OK' $summary }

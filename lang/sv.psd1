@@ -62,6 +62,8 @@
     'tile.passed' = 'Godkända'
     'tile.failed' = 'Underkända'
     'tile.skipped' = 'Överhoppade'
+    'tile.errors' = 'Fel'
+    'entra.errorsNote' = '{0} test(er) slutade med fel och har inget resultat. En vanlig orsak är att Microsoft Graph begränsade anropen. Kör igen för att få med dem, helst vid ett annat tillfälle.'
     'tile.secureScoreFor' = 'Secure Score ({0})'
     'tile.plansOn' = 'Defender-planer påslagna'
     'tile.recsHigh' = 'Rekommendationer: hög'
@@ -191,7 +193,7 @@
     'limit.partial' = '{0} lyckades bara delvis: {1}'
     'limit.govviz' = 'Governance Visualizer körs som vanlig användare, så roller som bara är tillgängliga via PIM men inte aktiverade ingår inte (kräver servicekonto). Klassiska prenumerationsadministratörer (ett pensionerat API) och kontrollen av Azure Landing Zones-policyversioner ingår inte.'
     'limit.defenderRecs' = 'Defender-rekommendationer hämtas från Azures API, som kan returnera en ofullständig lista. Använd Secure Score per kontroll som referens.'
-    'limit.cost' = 'Kostnad avser de senaste 12 månaderna per prenumeration. Prognos och kostnad per tagg ingår inte.'
+    'limit.cost' = 'Kostnaden avser innevarande månad hittills och de elva hela månaderna före, per prenumeration. Prognos och kostnad per tagg ingår inte.'
     'limit.hidePersonal' = 'Användardata är dolda i Governance Visualizers rapport och på sidan Styrning (-HidePersonalData). Övriga rapporter, bland annat Maesters, kan innehålla namn.'
     'limit.personal' = 'Rapporterna kan innehålla namn och e-postadresser (rolltilldelningar, Maester). Hantera dem som konfidentiella.'
 

@@ -1,14 +1,14 @@
-# Hämtade verktyg och byggda bundles
+# Downloaded tools and built bundles
 tools/
 rapportkit-bundle.zip
 
-# Resultat får aldrig checkas in: innehåller konfidentiell information om kundmiljöer
+# Results must never be committed: they contain confidential information about Azure environments
 rapportkit/
 *.log
 azqr_*
 AzGovViz*
 test-results/
 
-# Lokala säkerhetskopior
+# Local backups
 *.bak*
 

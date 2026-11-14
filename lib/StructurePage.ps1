@@ -51,6 +51,8 @@ function Get-MgRowsFromGovViz($d) {
 
 # --- The tree ------------------------------------------------------------------------------------------
 
+# One node of the tree as an HTML list item, with its children (management groups first, then subscriptions) nested inside.
+# $ByParent maps a parent id to its rows, $SubRes a subscription id to its number of resources. At most 12 levels deep.
 function Get-MgNodeHtml($Row, $ByParent, $SubRes, [int]$Depth) {
     $id = [string]$Row.Id
     $isSub = $Row.Typ -eq 'Prenumeration'
@@ -72,6 +74,7 @@ function Get-MgNodeHtml($Row, $ByParent, $SubRes, [int]$Depth) {
     '<li class="mg"><span class="nm">{0}</span><span class="tag">{1}{2}</span>{3}</li>' -f (Esc $name), (Esc (T 'tree.mg')), $idTag, $ul
 }
 
+# The whole tree of management groups and subscriptions as nested lists. A row whose parent is not among the rows becomes a root.
 function Get-MgTreeHtml($Rows, $SubRes) {
     $rows = @($Rows)
     $ids = @{}
@@ -187,8 +190,15 @@ function Get-NetworkModel($d) {
     @{ Vnets = $vn; ById = $byId; Edges = $edges; Degree = $degree; Components = @($components); Role = $role; Overlaps = @($overlaps); OverlapSkipped = $overlapSkipped; SubName = $subName; NodesIn = $nodesIn }
 }
 
+# The network model of the run, built once and kept in $d: both the Structure page and the overview use it.
+function Get-CachedNetworkModel($d) {
+    if (-not $d.NetModel) { $d.NetModel = Get-NetworkModel $d }
+    $d.NetModel
+}
+
 # --- Diagram: peerings as a network diagram (SVG) --------------------------------------------------------
 
+# The text cut to at most $Max characters, ending in an ellipsis if it was cut.
 function Get-ShortText([string]$Text, [int]$Max) { if ($Text.Length -gt $Max) { $Text.Substring(0, $Max - 1) + [string][char]0x2026 } else { $Text } }
 
 # One component (a list of network IDs) as SVG: the network with most peerings in the middle, the others in a ring. At most 13 networks.
@@ -236,6 +246,7 @@ function Get-NodeTypeName([string]$Type) {
     if ($script:Lang -and $script:Lang.ContainsKey($key)) { T $key } else { $Type }
 }
 
+# The content of the Structure page: key figures, the management group tree, observations about the networks, diagrams and tables.
 function Get-StructurePageHtml($d) {
     if (-not $d.StructurePresent) { return (New-NoDataHtml (T 'str.none.what') (T 'str.none.why')) }
     $sb = [System.Text.StringBuilder]::new()
@@ -248,7 +259,7 @@ function Get-StructurePageHtml($d) {
     foreach ($r in @($d.SubRes | Where-Object { $_ })) { $subRes[([string]$r.Prenumeration).ToLower()] = $r.Resurser }
 
     $model = $null
-    if ($d.Vnets) { $model = Get-NetworkModel $d }
+    if ($d.Vnets) { $model = Get-CachedNetworkModel $d }
 
     # Key figures
     [void]$sb.Append('<div class="tiles">')

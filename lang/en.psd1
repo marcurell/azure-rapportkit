@@ -62,6 +62,8 @@
     'tile.passed' = 'Passed'
     'tile.failed' = 'Failed'
     'tile.skipped' = 'Skipped'
+    'tile.errors' = 'Errors'
+    'entra.errorsNote' = '{0} test(s) ended with an error and have no result. A common cause is that Microsoft Graph limited the requests. Run again to get them, preferably at another time.'
     'tile.secureScoreFor' = 'Secure Score ({0})'
     'tile.plansOn' = 'Defender plans enabled'
     'tile.recsHigh' = 'Recommendations: high'
@@ -191,7 +193,7 @@
     'limit.partial' = '{0} succeeded only partly: {1}'
     'limit.govviz' = 'Governance Visualizer runs as a normal user, so roles that are only available through PIM but not activated are not included (this requires a service account). Classic subscription administrators (a retired API) and the check of Azure Landing Zones policy versions are not included.'
     'limit.defenderRecs' = 'Defender recommendations are retrieved from Azure''s API, which can return an incomplete list. Use Secure Score per control as the reference.'
-    'limit.cost' = 'Cost covers the last 12 months per subscription. Forecast and cost per tag are not included.'
+    'limit.cost' = 'Cost covers this month so far and the eleven whole months before it, per subscription. Forecast and cost per tag are not included.'
     'limit.hidePersonal' = 'User data is hidden in Governance Visualizer''s report and on the Governance page (-HidePersonalData). Other reports, including Maester''s, can contain names.'
     'limit.personal' = 'The reports can contain names and e-mail addresses (role assignments, Maester). Handle them as confidential.'
 

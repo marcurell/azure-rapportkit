@@ -61,6 +61,8 @@ function Initialize-Language([string]$Code) {
     $used
 }
 
+# The text for $Key in the chosen language, with the remaining arguments filled in ({0}, {1}, ...). A key that does not exist
+# is shown as [key], so that a missing text is visible in the report instead of stopping it.
 function T([string]$Key) {
     if ($null -eq $script:Lang) { [void](Initialize-Language 'en') }
     if (-not $script:Lang.ContainsKey($Key)) { return "[$Key]" }

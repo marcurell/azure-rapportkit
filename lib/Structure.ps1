@@ -50,7 +50,13 @@ function Get-IdLeaf([string]$Id) { if ($Id) { ($Id.TrimEnd('/') -split '/')[-1] 
 # Fetches and saves the structure in $OutDir. Returns a short text with counts. Every part is caught on its own; errors are collected in $Errors.
 function Save-StructureData([string]$OutDir, [string]$RootMg, [string[]]$SubscriptionIds, $Errors) {
     New-Item -ItemType Directory -Force $OutDir | Out-Null
-    $save = { param($name, $rows) $list = @($rows | Where-Object { $_ }); if ($list.Count) { $list | Export-Csv -Path (Join-Path $OutDir $name) -NoTypeInformation -Encoding utf8BOM; Write-Ok "$name`: $($list.Count) rows" } }
+    # A file is only written when there are rows, so the files of an earlier run in the same folder are removed first: otherwise
+    # for example a peering that has been deleted since then would still show in the report.
+    foreach ($old in 'managementgrupper.csv', 'natverk-vnet.csv', 'natverk-peerings.csv', 'natverk-noder.csv', 'resurser-per-prenumeration.csv') {
+        Remove-Item -LiteralPath (Join-Path $OutDir $old) -Force -ErrorAction SilentlyContinue
+    }
+    # (-NoTypeInformation is not given: it is the default in PowerShell 7, where the collection always runs, and newer versions warn about it.)
+    $save = { param($name, $rows) $list = @($rows | Where-Object { $_ }); if ($list.Count) { $list | Export-Csv -Path (Join-Path $OutDir $name) -Encoding utf8BOM; Write-Ok "$name`: $($list.Count) rows" } }
     $counts = [ordered]@{}
 
     # Management groups and subscriptions as a tree

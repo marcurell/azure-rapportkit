@@ -23,10 +23,10 @@ Scriptet **skriver inget i Azure-resurser eller i Entra-konfigurationen**. Det g
 $dest = Join-Path $env:USERPROFILE 'rapportkit-kit'
 $zip  = Join-Path $env:TEMP 'azure-rapportkit.zip'
 New-Item -ItemType Directory -Force $dest | Out-Null
-Invoke-WebRequest 'https://github.com/marcurell/azure-rapportkit/archive/refs/tags/v1.5.1.zip' -OutFile $zip
+Invoke-WebRequest 'https://github.com/marcurell/azure-rapportkit/archive/refs/tags/v1.5.2.zip' -OutFile $zip
 Expand-Archive $zip $dest -Force
 Get-ChildItem $dest -Recurse | Unblock-File
-$script = Join-Path $dest 'azure-rapportkit-1.5.1\Run-Rapportkit.ps1'
+$script = Join-Path $dest 'azure-rapportkit-1.5.2\Run-Rapportkit.ps1'
 $arg = '-NoExit -ExecutionPolicy Bypass -File "' + $script + '"'
 Start-Process powershell -ArgumentList $arg
 ```
@@ -191,8 +191,8 @@ Har kontot bara åtkomst till en subscription faller Governance Visualizer på b
 Kan datorn som ska köra scriptet inte hämta saker själv: kör `Build-Bundle.ps1` på en dator med internet. Det laddar ner de fasta versionerna till `tools\` (kontrollsummorna kontrolleras), och packar scriptet, verktygen, licenstexterna och README i `rapportkit-bundle.zip` med en `.sha256`-fil. Packa upp zippen på den andra datorn och kör `.\Run-Rapportkit.ps1 -Offline`.
 
 ```powershell
-.\Build-Bundle.ps1                  # med installers (~300 MB)
-.\Build-Bundle.ps1 -SkipInstallers  # utan PowerShell/Azure CLI/Git
+.\Build-Bundle.ps1                  # med installers (~250 MB)
+.\Build-Bundle.ps1 -SkipInstallers  # utan PowerShell/Azure CLI
 ```
 
 ### Ge dig själv läsrätt på tenant root (görs av en Global Administrator)

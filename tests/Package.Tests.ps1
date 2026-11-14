@@ -50,7 +50,7 @@ BeforeAll {
 }
 
 Describe 'ConvertTo-InvariantNumber' {
-    It 'läser decimaltecken och tusentalsavgränsare i flera skrivsätt' {
+    It 'reads decimal and thousands separators written in several ways' {
         foreach ($c in @(@('0,2857', 0.2857), @('0.2857', 0.2857), @('236,38', 236.38), @('1 234,56', 1234.56), @('1.234,56', 1234.56), @('1,234.56', 1234.56), @('243', 243))) {
             ConvertTo-InvariantNumber $c[0] | Should -Be $c[1]
         }
@@ -59,7 +59,7 @@ Describe 'ConvertTo-InvariantNumber' {
     }
 }
 
-Describe 'New-RunPackage med en 1.4.2-körning' {
+Describe 'New-RunPackage with a 1.4.2 run' {
     BeforeAll {
         $script:Run = Join-Path $TestDrive 'run2026-10'
         New-Run $script:Run
@@ -67,7 +67,7 @@ Describe 'New-RunPackage med en 1.4.2-körning' {
         $script:Data = Join-Path $script:R.OutDir 'data'
         $script:Man = Get-Content (Join-Path $script:R.OutDir 'manifest.json') -Raw -Encoding UTF8 | ConvertFrom-Json
     }
-    It 'skriver manifest med schema, tider i UTC, tenant och verktyg' {
+    It 'writes a manifest with schema, times in UTC, tenant and tools' {
         $script:Man.schema | Should -Be 'rapportkit.run/1'
         $script:Man.tenantId | Should -Be '00000000-0000-0000-0000-000000000001'
         $script:Man.period | Should -Be '2026-10'
@@ -77,36 +77,36 @@ Describe 'New-RunPackage med en 1.4.2-körning' {
         $script:Man.tools.azqrPinned | Should -Be '4.3.0'
         $script:Man.imported.keyQuality | Should -Be 'exact'
     }
-    It 'ger samma runId varje gång för samma körning' {
+    It 'gives the same runId every time for the same run' {
         $again = New-RunPackage -RunDir $script:Run -OutDir (Join-Path $TestDrive 'again')
         $again.Manifest.runId | Should -Be $script:Man.runId
     }
-    It 'har sha256 och radantal som stämmer för varje fil' {
+    It 'has the right sha256 and row count for every file' {
         foreach ($p in $script:Man.files.PSObject.Properties) {
             $path = Join-Path $script:R.OutDir ($p.Name -replace '/', '\')
             (Get-FileSha256 $path) | Should -Be $p.Value.sha256
             @(Get-Content $path | Where-Object { $_ }).Count | Should -Be $p.Value.rows
         }
     }
-    It 'skriver JSON Lines utan BOM' {
+    It 'writes JSON Lines without a BOM' {
         $bytes = [System.IO.File]::ReadAllBytes((Join-Path $script:Data 'findings.jsonl'))
         ($bytes[0] -eq 0xEF -and $bytes[1] -eq 0xBB) | Should -BeFalse
     }
-    It 'gör nycklar av källa, regel och resurs i gemener' {
+    It 'makes keys from source, rule and resource in lower case' {
         $f = Read-Lines (Join-Path $script:Data 'findings.jsonl')
         ($f | Where-Object source -eq 'azqr').key | Should -Be '"azqr:app-009:/subscriptions/63621c47-1b51-4ac6-b577-9018793b8382/resourcegroups/rg/providers/microsoft.web/sites/app1"'.Trim('"')
         ($f | Where-Object ruleId -eq 'mt.1').key | Should -Be 'maester:mt.1:'
         ($f | Where-Object source -eq 'defender').ruleId | Should -Be 'aaa-111'
         @($f.key | Select-Object -Unique).Count | Should -Be @($f).Count
     }
-    It 'tar Maester från den senaste TestResults-filen, inte från en kvarlämnad maester.json' {
+    It 'takes Maester from the newest TestResults file, not from a maester.json that was left behind' {
         $f = Read-Lines (Join-Path $script:Data 'findings.jsonl')
         ($f | Where-Object ruleId -eq 'mt.9') | Should -BeNullOrEmpty
         ($f | Where-Object ruleId -eq 'mt.1').status | Should -Be 'open'
         ($f | Where-Object ruleId -eq 'mt.2').status | Should -Be 'skipped'
         ($f | Where-Object ruleId -eq 'mt.2').severity | Should -Be 'info'
     }
-    It 'lägger den generella texten i rules och det tenantspecifika i findings' {
+    It 'puts the general text in rules and what is specific to the tenant in findings' {
         $rules = Read-Lines (Join-Path $script:Data 'rules.jsonl')
         ($rules | Where-Object ruleId -eq 'mt.1').description | Should -Be 'Generic text'
         ($rules | Where-Object { $_.source -eq 'azqr' }).learnUrl | Should -Be 'https://learn.example/vnet'
@@ -114,7 +114,7 @@ Describe 'New-RunPackage med en 1.4.2-körning' {
         ($f | Where-Object ruleId -eq 'mt.1').detail | Should -Be 'Tenant specific'
         ($f | Where-Object ruleId -eq 'mt.2').detail | Should -Be 'NotLicensed'
     }
-    It 'skriver tal med punkt och markerar innevarande kostnadsmånad som ofullständig' {
+    It 'writes numbers with a decimal point and marks the current cost month as partial' {
         $m = Read-Lines (Join-Path $script:Data 'metrics.jsonl')
         ($m | Where-Object { $_.name -eq 'secureScore.percent' }).value | Should -Be 28.57
         $cost = $m | Where-Object { $_.name -eq 'cost.month' }
@@ -124,12 +124,12 @@ Describe 'New-RunPackage med en 1.4.2-körning' {
         ($cost | Where-Object period -eq '2026-10').partial | Should -BeTrue
         ($m | Where-Object { $_.name -eq 'secureScore.control.unhealthy' }).control | Should -Be 'ctrl-1'
     }
-    It 'tar källornas status från run-summary.json (sources)' {
+    It 'takes the states of the sources from run-summary.json (sources)' {
         $script:Man.sources.azqr.state | Should -Be 'OK'
         $script:Man.sources.recommendations.state | Should -Be 'Partial'
         $script:Man.sources.recommendations.rows | Should -Be 1
     }
-    It 'ger struktur med engelska typer' {
+    It 'gives the structure with English types' {
         $s = Read-Lines (Join-Path $script:Data 'scopes.jsonl')
         ($s | Where-Object id -eq 'root').type | Should -Be 'managementGroup'
         ($s | Where-Object type -eq 'subscription').parentId | Should -Be 'root'
@@ -137,7 +137,7 @@ Describe 'New-RunPackage med en 1.4.2-körning' {
     }
 }
 
-Describe 'New-RunPackage med en körning från före 1.4.1' {
+Describe 'New-RunPackage with a run from before 1.4.1' {
     BeforeAll {
         $script:Run = Join-Path $TestDrive 'old'
         New-Run $script:Run -OldFormat
@@ -145,20 +145,20 @@ Describe 'New-RunPackage med en körning från före 1.4.1' {
         $script:Data = Join-Path $script:R.OutDir 'data'
         $script:Man = Get-Content (Join-Path $script:R.OutDir 'manifest.json') -Raw -Encoding UTF8 | ConvertFrom-Json
     }
-    It 'mappar prenumerationsnamn till id via AzGovViz och räknar dem' {
+    It 'maps subscription names to ids through AzGovViz and counts them' {
         $m = Read-Lines (Join-Path $script:Data 'metrics.jsonl')
         ($m | Where-Object { $_.name -eq 'secureScore.percent' }).scopeId | Should -Be '63621c47-1b51-4ac6-b577-9018793b8382'
         $script:Man.imported.subscriptionsMappedByName | Should -BeGreaterThan 0
         $script:Man.imported.subscriptionsUnmapped | Should -Be 0
     }
-    It 'härleder nycklar och markerar det i manifestet' {
+    It 'derives keys and says so in the manifest' {
         $script:Man.imported.keyQuality | Should -Be 'derived'
         $f = Read-Lines (Join-Path $script:Data 'findings.jsonl')
         ($f | Where-Object source -eq 'defender').ruleId | Should -Be 'name-enable-mfa-now'
         ($f | Where-Object { $_.source -eq 'defender' }).key | Should -Match '^defender:name-enable-mfa-now:'
         ((Read-Lines (Join-Path $script:Data 'metrics.jsonl')) | Where-Object { $_.name -eq 'secureScore.control.unhealthy' }).control | Should -Be 'name-enable-mfa'
     }
-    It 'tolkar steg från run-summary.json utan sources (Delvis blir Partial för alla Defender-källor)' {
+    It 'reads the steps from a run-summary.json without sources (Delvis becomes Partial for every Defender source)' {
         $script:Man.sources.azqr.state | Should -Be 'OK'
         $script:Man.sources.cost.state | Should -Be 'Partial'
         $script:Man.sources.recommendations.state | Should -Be 'Partial'
@@ -167,7 +167,7 @@ Describe 'New-RunPackage med en körning från före 1.4.1' {
 }
 
 Describe 'ConvertTo-UtcText' {
-    It 'ger samma resultat för text, DateTime och i andra språkinställningar' {
+    It 'gives the same result for text, DateTime and under other language settings' {
         $a = ConvertTo-UtcText '2026-10-30T15:00:00'
         $a | Should -Match '^2026-10-30T\d{2}:00:00Z$'
         ConvertTo-UtcText ([datetime]'2026-10-30T15:00:00') | Should -Be $a
@@ -183,8 +183,8 @@ Describe 'ConvertTo-UtcText' {
     }
 }
 
-Describe 'New-RunPackage utan run-summary.json' {
-    It 'går att göra: tenant och tid kommer från Maester och källor utan data blir Skipped' {
+Describe 'New-RunPackage without run-summary.json' {
+    It 'works: tenant and time come from Maester, and sources without data become Skipped' {
         $run = Join-Path $TestDrive 'nosummary'
         New-Run $run -NoSummary
         Remove-Item (Join-Path $run 'portal') -Recurse -Force
@@ -195,7 +195,7 @@ Describe 'New-RunPackage utan run-summary.json' {
         $r.Manifest.sources.azqr.state | Should -Be 'OK'
         $r.Manifest.sources.cost.state | Should -Be 'Skipped'
     }
-    It 'ger ett begripligt fel om mappen saknas' {
+    It 'gives an understandable error if the folder is missing' {
         { New-RunPackage -RunDir (Join-Path $TestDrive 'finns-inte') } | Should -Throw '*not found*'
     }
 }
