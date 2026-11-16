@@ -25,7 +25,12 @@ Every change is marked in the file with `RAPPORTKIT-`:
 2. it removes the advisory pauses that wait for a key press,
 3. it skips the call to the retired classic administrators API, which otherwise stops the run.
 
-The changes are tied to version 6.7.2.
+The changes are tied to version 6.7.2. The script also runs Governance Visualizer with `-StatsOptOut`, so that it sends no
+usage statistics to Microsoft Application Insights.
+
+Maester's test suite is not downloaded separately: `Install-MaesterTests` copies the tests that come with the Maester module,
+so they always belong to the Maester version that runs. PowerShell modules that already exist on the computer in an accepted
+version are used as they are, also when they are newer than the tested version.
 
 ## Note
 

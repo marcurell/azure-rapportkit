@@ -23,10 +23,10 @@ Scriptet **skriver inget i Azure-resurser eller i Entra-konfigurationen**. Det g
 $dest = Join-Path $env:USERPROFILE 'rapportkit-kit'
 $zip  = Join-Path $env:TEMP 'azure-rapportkit.zip'
 New-Item -ItemType Directory -Force $dest | Out-Null
-Invoke-WebRequest 'https://github.com/marcurell/azure-rapportkit/archive/refs/tags/v1.5.2.zip' -OutFile $zip
+Invoke-WebRequest 'https://github.com/marcurell/azure-rapportkit/archive/refs/tags/v1.5.3.zip' -OutFile $zip
 Expand-Archive $zip $dest -Force
 Get-ChildItem $dest -Recurse | Unblock-File
-$script = Join-Path $dest 'azure-rapportkit-1.5.2\Run-Rapportkit.ps1'
+$script = Join-Path $dest 'azure-rapportkit-1.5.3\Run-Rapportkit.ps1'
 $arg = '-NoExit -ExecutionPolicy Bypass -File "' + $script + '"'
 Start-Process powershell -ArgumentList $arg
 ```
@@ -106,7 +106,7 @@ Utseendet är **filerna i mappen `branding\`** (`theme.json`, logga, bakgrund, `
 
 Se [branding/README.md](branding/README.md) för filerna och fälten i `theme.json`. Saknas eller är något ogiltigt används inbyggda standardvärden och scriptet varnar. Ett exempel på en annan profil finns i `branding-exempel\neutral`.
 
-**Verktygens egna rapporter** (Governance Visualizer, Maester, azqr:s Excel) går inte att göra om till samma stil, så de länkas som fördjupning och öppnas i nytt fönster. Observera att Governance Visualizers egen rapport hämtar sin stil, sina skript och sina ikoner från internet (bland annat `www.azadvertizer.net` och `cdnjs.cloudflare.com`), och därför inte visas rätt offline. Sidorna i det här kitet gör inga externa anrop.
+**Verktygens egna rapporter** (Governance Visualizer, Maester, azqr:s Excel) går inte att göra om till samma stil, så de länkas som fördjupning och öppnas i nytt fönster. Observera att Governance Visualizers egen rapport hämtar sin stil, sina skript och sina ikoner från internet (bland annat `www.azadvertizer.net` och `cdnjs.cloudflare.com`), och därför inte visas rätt offline. Sidorna i det här kitet gör inga externa anrop. Governance Visualizer körs med `-StatsOptOut`, så den skickar ingen användningsstatistik till Microsoft.
 
 ## Anonymiserad rapport
 
@@ -152,7 +152,7 @@ Har kontot bara åtkomst till en subscription faller Governance Visualizer på b
 1. **Förberedelser**: tenant-ID, resultatmappar, loggfil.
 2. **Förkontroll**: kontrollerar verktyg, nätverk (GitHub, PowerShell Gallery, inloggning, Azure, Graph), diskutrymme och om frågor kan besvaras, innan något hämtas. Saknas något visas det tydligt och du väljer om du vill fortsätta ändå.
 3. **Azure CLI, inloggning och rollkontroll**: installerar Azure CLI om det saknas, loggar in och kontrollerar kontots roller (Azure och Entra). Saknas roller får du instruktionen och väljer att avsluta eller fortsätta.
-4. **Beroenden**: hämtar det som saknas, i **fasta, testade versioner**. PowerShell 7 och azqr via winget (azqr annars direkt från GitHub), Azure CLI via winget eller, om winget saknas, som signerad installationsfil (MSI) direkt från Microsoft (kräver administratörsgodkännande), Governance Visualizer som zip från GitHub och moduler från PowerShell Gallery till `<resultatmapp>\_modules`. Zip-filerna kontrolleras mot SHA256-kontrollsummor, och en ändrad fil stoppar körningen (se `-AllowUnverified`).
+4. **Beroenden**: hämtar det som saknas, i **fasta, testade versioner**. PowerShell 7 och azqr via winget (azqr annars direkt från GitHub), Azure CLI via winget eller, om winget saknas, som signerad installationsfil (MSI) direkt från Microsoft (kräver administratörsgodkännande), Governance Visualizer som zip från GitHub och moduler från PowerShell Gallery till `<resultatmapp>\_modules`. Zip-filerna kontrolleras mot SHA256-kontrollsummor, och en ändrad fil stoppar körningen (se `-AllowUnverified`). En modul som redan finns på datorn i en godkänd version används som den är, även om den är nyare än den testade (Az.Accounts 5.5.3 eller senare, AzAPICall 1.2.4 eller senare, Pester 5.5 till 5.x, Maester 2.3.0 eller senare); `run-summary.json` i resultatmappen visar vilka versioner som kördes.
 5. **Inloggning**: Az PowerShell och valfritt Microsoft Graph. Därefter kontrolleras om kontot kan läsa management group som Governance Visualizer startar på.
 6. **Governance Visualizer**
 7. **azqr**

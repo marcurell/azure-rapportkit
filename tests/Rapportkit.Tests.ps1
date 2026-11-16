@@ -381,6 +381,15 @@ Describe 'An anonymized run (-Anonymize) leaves only the anonymized report' {
     }
 }
 
+Describe 'Governance Visualizer telemetry' {
+    It 'always runs Governance Visualizer with -StatsOptOut, so that no usage statistics are sent' {
+        $src = Get-Content $script:ScriptPath -Raw -Encoding UTF8
+        $set = $src.IndexOf('$gvArgs.StatsOptOut = $true')
+        $set | Should -BeGreaterThan 0
+        $set | Should -BeLessThan $src.IndexOf('& $gvScript @gvArgs')
+    }
+}
+
 Describe 'Fixes from the code review of 1.5.1' {
     BeforeAll { $script:Src = Get-Content $script:ScriptPath -Raw -Encoding UTF8 }
     It 'removes the Defender and cost files of an earlier run before step 9 writes new ones' {

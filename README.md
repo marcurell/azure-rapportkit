@@ -23,10 +23,10 @@ Open PowerShell or PowerShell ISE and paste the block below. It downloads the co
 $dest = Join-Path $env:USERPROFILE 'rapportkit-kit'
 $zip  = Join-Path $env:TEMP 'azure-rapportkit.zip'
 New-Item -ItemType Directory -Force $dest | Out-Null
-Invoke-WebRequest 'https://github.com/marcurell/azure-rapportkit/archive/refs/tags/v1.5.2.zip' -OutFile $zip
+Invoke-WebRequest 'https://github.com/marcurell/azure-rapportkit/archive/refs/tags/v1.5.3.zip' -OutFile $zip
 Expand-Archive $zip $dest -Force
 Get-ChildItem $dest -Recurse | Unblock-File
-$script = Join-Path $dest 'azure-rapportkit-1.5.2\Run-Rapportkit.ps1'
+$script = Join-Path $dest 'azure-rapportkit-1.5.3\Run-Rapportkit.ps1'
 $arg = '-NoExit -ExecutionPolicy Bypass -File "' + $script + '"'
 Start-Process powershell -ArgumentList $arg
 ```
@@ -108,7 +108,7 @@ The look is **the files in the folder `branding\`** (`theme.json`, logo, backgro
 
 See [branding/README.md](branding/README.md) for the files and the fields in `theme.json`. If something is missing or invalid, built-in defaults are used and the script warns. An example of another profile is in `branding-exempel\neutral`.
 
-**The tools' own reports** (Governance Visualizer, Maester, azqr's Excel) cannot be restyled, so they are linked as further reading and open in a new window. Note that Governance Visualizer's own report fetches its style, scripts and icons from the internet (among others `www.azadvertizer.net` and `cdnjs.cloudflare.com`), and therefore does not display correctly offline. The pages in this kit make no external calls.
+**The tools' own reports** (Governance Visualizer, Maester, azqr's Excel) cannot be restyled, so they are linked as further reading and open in a new window. Note that Governance Visualizer's own report fetches its style, scripts and icons from the internet (among others `www.azadvertizer.net` and `cdnjs.cloudflare.com`), and therefore does not display correctly offline. The pages in this kit make no external calls. Governance Visualizer is run with `-StatsOptOut`, so it sends no usage statistics to Microsoft.
 
 ## Anonymized report
 
@@ -154,7 +154,7 @@ If the account only has access to one subscription Governance Visualizer fails t
 1. **Preparation**: tenant ID, result folders, log file.
 2. **Pre-flight**: checks tools, network (GitHub, PowerShell Gallery, sign-in, Azure, Graph), disk space and whether questions can be answered, before anything is fetched. If something is missing it is shown clearly and you choose whether to continue anyway.
 3. **Azure CLI, sign-in and role check**: installs Azure CLI if it is missing, signs in and checks the roles of the account (Azure and Entra). If roles are missing you get the instruction and choose to stop or continue.
-4. **Dependencies**: fetches what is missing, in **pinned, tested versions**. PowerShell 7 and azqr via winget (azqr otherwise directly from GitHub), Azure CLI via winget or, if winget is missing, as a signed installer file (MSI) directly from Microsoft (requires administrator approval), Governance Visualizer as a zip from GitHub and modules from the PowerShell Gallery to `<result folder>\_modules`. The zip files are checked against SHA256 checksums, and a changed file stops the run (see `-AllowUnverified`).
+4. **Dependencies**: fetches what is missing, in **pinned, tested versions**. PowerShell 7 and azqr via winget (azqr otherwise directly from GitHub), Azure CLI via winget or, if winget is missing, as a signed installer file (MSI) directly from Microsoft (requires administrator approval), Governance Visualizer as a zip from GitHub and modules from the PowerShell Gallery to `<result folder>\_modules`. The zip files are checked against SHA256 checksums, and a changed file stops the run (see `-AllowUnverified`). A module that already exists on the computer in an accepted version is used as it is, also when it is newer than the tested one (Az.Accounts 5.5.3 or later, AzAPICall 1.2.4 or later, Pester 5.5 to 5.x, Maester 2.3.0 or later); `run-summary.json` in the result folder records which versions ran.
 5. **Sign-in**: Az PowerShell and optionally Microsoft Graph. Then it is checked whether the account can read the management group that Governance Visualizer starts at.
 6. **Governance Visualizer**
 7. **azqr**

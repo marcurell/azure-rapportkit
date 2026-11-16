@@ -160,7 +160,7 @@ $TotalSteps = 10
 # Governance Visualizer is fetched as a fixed version (the one that was tested). Changed on purpose, not by accident.
 $GvVersion = '6.7.2'
 $GvUrl = "https://github.com/Azure/Azure-Governance-Visualizer/archive/refs/tags/$GvVersion.zip"
-$KitVersion = '1.5.2'
+$KitVersion = '1.5.3'
 
 # Tested (pinned) tool versions, and checksums (SHA256) for the zip files that are fetched directly. Every run then uses
 # the same tools that were tested, and a changed file is detected. Tools installed via winget are checked by winget
@@ -1451,6 +1451,9 @@ try {
                 # PIM eligibility reporting requires a service account and cannot be run as an ordinary user.
                 # Without the flag the tool pauses and waits for a key press, so we turn it off right away.
                 $gvArgs.NoPIMEligibility = $true
+                # Without the flag the tool sends usage statistics (with hashed tenant and account IDs) to Microsoft
+                # Application Insights at the end of the run. Nothing in the report needs it, so it is always turned off.
+                $gvArgs.StatsOptOut = $true
                 # -HidePersonalData: the tool hides names and e-mail addresses in the role assignments in its report.
                 if ($HidePersonalData) { $gvArgs.DoNotShowRoleAssignmentsUserData = $true; Write-Action 'User data is hidden in the Governance Visualizer report (-HidePersonalData).' }
                 # The output is also saved in $gvLines so that the real cause can be picked out on failure.
@@ -1731,7 +1734,9 @@ try {
     # STEP 10: HTML report. Every section is built on its own; if a section cannot be built
     # it becomes a warning in the report, not an abort.
     # =======================================================================
-    Write-Step 10 'Building the report' 'Reads the results of the tools and writes a multi-page report in a common style. The look is set by the files in the folder branding\ (see branding\README.md).'
+    # A packed customer kit can have a branding\ folder without the README, so it is only pointed to when it is there.
+    $brandHint = if (Test-Path -LiteralPath (Join-Path $PSScriptRoot 'branding\README.md')) { ' (see branding\README.md)' } else { '' }
+    Write-Step 10 'Building the report' "Reads the results of the tools and writes a multi-page report in a common style. The look is set by the files in the folder branding\$brandHint."
     # The report generator is in lib\Report.ps1: it reads the results and builds the pages with the chosen theme.
     $reportLib = Join-Path $ScriptRoot 'lib\Report.ps1'
     if (-not (Test-Path -LiteralPath $reportLib)) { Fail 'lib\Report.ps1 is missing next to the script, so the report cannot be built.' 'Use the whole kit (the whole zip file, unpacked), not just Run-Rapportkit.ps1.' }
